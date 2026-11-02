@@ -38,7 +38,7 @@ npm run db:migrate
 npm run deploy
 ```
 
-表示されたWorker URLの `/health` が `ok:true` を返すことを確認します。APIはアカウント機能も内包しており、別のアカウントWorker・Render・Vercel APIサーバーは不要です。新規D1に既存ユーザーのデータは入りません。既存のD1を使う場合は、バックアップを取り、そのIDを指定してください。
+許可Originと共有鍵を設定したサイト経由の `/api/health` が `ok:true` を返すことを確認します。APIはアカウント機能も内包しており、別のアカウントWorker・Render・Vercel APIサーバーは不要です。新規D1に既存ユーザーのデータは入りません。既存のD1を使う場合は、バックアップを取り、そのIDを指定してください。
 
 ## フロント側の環境変数
 
@@ -56,7 +56,7 @@ API_BASE_URL=https://xeroxyt-ntv6-apiv1.your-subdomain.workers.dev
 
 | メソッド | パス | 用途 |
 |---|---|---|
-| GET | `/health` | 認証不要の稼働確認 |
+| GET | `/health` | 許可Origin・共有鍵が必要な稼働確認 |
 | POST | `/api/account/register` | サイトアカウント作成 |
 | POST | `/api/account/login` | ログイン |
 | GET | `/api/account/session` | セッション確認 |
@@ -134,3 +134,21 @@ Cloudflareはバインディング、Node版はD1 REST経由で同じテーブ�
 CORSは `ALLOWED_ORIGINS` の完全一致だけを許可します。自動モードで直接接続が認証/CORSエラーになった場合、フロントはサーバー経由へ切り替えます。ログインCookieのSameSite属性はこの機能のために緩めません。
 
 Node起動の `/health` とCORS/未認証拒否はローカルで検証しています。Renderへの実デプロイやD1 RESTモードでの実アカウント作成は、この更新時点では未検証です。
+
+## 接続元の制限（全ルート）
+
+`ALLOWED_ORIGINS` に列挙したフロントのOrigin以外は、`/health` を含めすべて403で拒否します。Originなしの呼び出しも許可しません。OriginはURLの `https://ホスト名[:ポート]` 部分で、ページのパス単位の許可ではありません。
+
+さらに標準設定では `REQUIRE_PROXY_SECRET=true` とし、VercelゲートウェイとAPIだけが持つ `API_SHARED_SECRET` を必須にします。Vercelフロント側とすべてのAPI側に同じ十分長いランダム値をSecretで設定します。Cloudflareでは `npx wrangler secret put API_SHARED_SECRET` を使います。リポジトリ・ブラウザーコード・VITE_*には保存しません。ゲートウェイはAuthorizationヘッダーでサーバー間だけに送信します。
+
+| 変数 | API側 | フロント側 |
+|---|---|---|
+| ALLOWED_ORIGINS | 許可するフロントOriginをカンマ区切り | 不要 |
+| API_SHARED_SECRET | 必須・Secret | 必須・サーバー専用Secret |
+| REQUIRE_PROXY_SECRET | 標準はtrue | 不要 |
+
+この設定では、許可されたOriginをcurlなどで偽装しても共有秘密鍵がない呼び出しは403になります。秘密鍵だけが合っていてもOriginが許可されていなければ拒否します。サイトアカウントの認証も別途必要です。
+
+ブラウザーは秘密鍵を持たないため、秘密鍵必須時の直接接続は拒否されます。フロントの自動モードはサーバー経由へ切り替わります。直接接続を許可したい場合に限りREQUIRE_PROXY_SECRET=falseにできますが、その場合Originは偽装可能で、他サーバーからの呼び出しをOriginだけで完全に防ぐことはできません。
+
+RenderはHTTPのhealthCheckPathを設定せず、TCPの起動確認を使用します。APIの `/health` を外から確認する場合も、許可Originと共有鍵が必要です。サイト経由の `/api/health` はゲートウェイが必要なヘッダーを付けます。

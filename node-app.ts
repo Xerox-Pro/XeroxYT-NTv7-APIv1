@@ -1,3 +1,4 @@
+import { authorizeSource } from './access-policy.mjs';
 import accountWorker from './cloudflare/auth/worker.mjs';
 import { createD1Database } from './d1-rest.mjs';
 import express from 'express';
@@ -11,9 +12,10 @@ function accountFetch(input:RequestInfo|URL,init?:RequestInit){
  const configured=env.ACCOUNT_API_URL;
  if(!configured)return Promise.resolve(Response.json({error:'ACCOUNT_API_URL must point to the primary Cloudflare API.'},{status:503}));
  const base=new URL(configured);if(base.protocol!=='https:')throw new Error('ACCOUNT_API_URL must use HTTPS');
- const path=new URL(original.url);return fetch(new Request(base.origin+path.pathname+path.search,original));
+ const path=new URL(original.url);const headers=new Headers(original.headers);if(env.API_SHARED_SECRET)headers.set('Authorization','Bearer '+env.API_SHARED_SECRET);if(!headers.has('Origin'))headers.set('Origin',(env.ALLOWED_ORIGINS||'').split(',')[0].trim());return fetch(new Request(base.origin+path.pathname+path.search,new Request(original,{headers})));
 }
 const app=express();
+app.use((req,res,next)=>{const headers=new Headers();for(const name of ['origin','authorization']){const value=req.headers[name];if(typeof value==='string')headers.set(name,value);}const rejected=authorizeSource(new Request('https://api.internal'+req.originalUrl,{headers}),env);if(rejected){res.status(rejected.status);rejected.text().then(body=>res.type('application/json').send(body)).catch(next);return;}next();});
 app.use((req,res,next)=>{
  const origin=req.headers.origin;
  const allowed=(env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim());

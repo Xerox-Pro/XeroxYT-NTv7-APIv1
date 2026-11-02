@@ -5,7 +5,6 @@ services:
     plan: free
     buildCommand: npm ci && npm run build
     startCommand: npm start
-    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
@@ -13,3 +12,7 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
+      - key: API_SHARED_SECRET
+        sync: false
+      - key: REQUIRE_PROXY_SECRET
+        value: "true"

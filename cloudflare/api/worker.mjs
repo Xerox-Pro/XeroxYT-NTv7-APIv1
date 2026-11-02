@@ -1,3 +1,4 @@
+import { authorizeSource } from '../../access-policy.mjs';
 import express from 'express';
 import { httpServerHandler } from 'cloudflare:node';
 import { env } from 'cloudflare:workers';
@@ -29,6 +30,7 @@ async function handle(request, bindings, ctx) {
   return handler.fetch(request,bindings,ctx);
 }
 export default {async fetch(request,bindings,ctx){
+ const rejected=authorizeSource(request,bindings);if(rejected)return rejected;
  const origin=request.headers.get('Origin');const allowed=(bindings.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim());
  const cors=origin&&allowed.includes(origin)?{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Credentials':'true','Access-Control-Allow-Headers':'Content-Type,Range,X-Youtube-Credentials,X-Client-Id,X-Usage-Token,X-Client-Usage','Access-Control-Allow-Methods':'GET,POST,PUT,OPTIONS','Access-Control-Expose-Headers':'X-Daily-Usage-Token','Vary':'Origin'}:{};
  if(request.method==='OPTIONS')return new Response(null,{status:origin&&allowed.includes(origin)?204:403,headers:cors});

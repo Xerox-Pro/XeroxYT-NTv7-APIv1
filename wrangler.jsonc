@@ -15,7 +15,8 @@
   ],
   "vars": {
     "NODE_ENV": "production",
-    "ALLOWED_ORIGINS": "https://your-frontend.vercel.app"
+    "ALLOWED_ORIGINS": "https://your-frontend.vercel.app",
+    "REQUIRE_PROXY_SECRET": "true"
   },
   "observability": {
     "enabled": true,
