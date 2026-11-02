@@ -5,7 +5,6 @@ import path from "path";
 import crypto from "crypto";
 import { Innertube, UniversalCache } from "youtubei.js";
 import axios from "axios";
-import { GoogleGenAI } from "@google/genai";
 
 // Suppress noisy youtubei.js internal logs
 const originalWarn = console.warn;
@@ -33,7 +32,6 @@ console.error = (...args) => {
   originalError.apply(console, args);
 };
 
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 let yt: Innertube | null = null;
 let ytInstancePromise: Promise<Innertube> | null = null;
@@ -4551,35 +4549,6 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
-
-  // --- AI Studio API ---
-  app.post(
-    "/api/aistudio/chat",
-    express.json({ limit: "50mb" }),
-    async (req, res) => {
-      try {
-        const { messages, systemInstruction, temperature, model } = req.body;
-
-        const selectedModel = model || "gemini-3.5-flash-lite";
-        const response = await genAI.models.generateContent({
-          model: selectedModel,
-          contents: messages,
-          config: {
-            systemInstruction,
-            temperature: temperature || 0.7,
-          },
-        });
-
-        res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
-    return res.json({ text: response.text });
-      } catch (e) {
-        console.error("[AI Studio] Error calling Gemini API:", e);
-        res.status(500).json({ error: e.message || String(e) });
-      }
-    },
-  );
-
-  // ---------------------
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);

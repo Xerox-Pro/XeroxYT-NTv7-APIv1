@@ -5,11 +5,8 @@ import path from "path";
 import crypto from "crypto";
 import { Innertube, UniversalCache } from "youtubei.js/cf-worker";
 import axios from "axios";
-import { GoogleGenAI } from "@google/genai";
 
 export async function createApiApp(env, flowStore, sharedQuota) {
-const genAI = env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: env.GEMINI_API_KEY }) : null;
-
 let yt: Innertube | null = null;
 let ytInstancePromise: Promise<Innertube> | null = null;
 let lastCredentials: any = null;
@@ -4479,36 +4476,6 @@ async function startServer() {
       message: err.message,
     });
   });
-
-  // --- AI Studio API ---
-  app.post(
-    "/api/aistudio/chat",
-    express.json({ limit: "50mb" }),
-    async (req, res) => {
-      try {
-        const { messages, systemInstruction, temperature, model } = req.body;
-
-        const selectedModel = model || "gemini-3.5-flash-lite";
-        if (!genAI) return res.status(503).json({ code: 'GEMINI_NOT_CONFIGURED', error: 'GEMINI_API_KEY is not configured.' });
-        const response = await genAI.models.generateContent({
-          model: selectedModel,
-          contents: messages,
-          config: {
-            systemInstruction,
-            temperature: temperature || 0.7,
-          },
-        });
-
-        res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
-    return res.json({ text: response.text });
-      } catch (e) {
-        console.error("[AI Studio] Error calling Gemini API:", e);
-        res.status(500).json({ error: e.message || String(e) });
-      }
-    },
-  );
-
-  // ---------------------
 
 
 

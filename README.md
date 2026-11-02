@@ -76,16 +76,6 @@ API_BASE_URL=https://xeroxyt-ntv6-apiv1.your-subdomain.workers.dev
 
 ログイン・登録のPOSTはJSONで `username` と `password` を渡します。ユーザー名は英小文字・数字・_で3～32文字、パスワードは12文字以上です。Originの検証とHttpOnly Cookieによる認証を維持してください。ダウンロード用APIは410を返します。
 
-## 任意の機能
-
-AI Studioを使う場合のみ、次を設定します。
-
-```sh
-npx wrangler secret put GEMINI_API_KEY
-```
-
-未設定の場合はAI Studioが503 / GEMINI_NOT_CONFIGUREDを返します。キーをREADME、ソースやフロント用環境変数に保存しないでください。
-
 ## 制限と検証
 
 Workers FreeではCPU時間の制限により、重い解析で1102エラーが起こる場合があります。有料プランへの変更は自動では行いません。YouTube側の仕様・制限や外部プレイヤー取得元の状態によって利用できない機能・動画もあります。Googleログイン後の個人データ機能や配信中チャットはすべての条件で検証済みではありません。
