@@ -442,7 +442,7 @@ async function startServer() {
   app.use(async (req, res, next) => {
     if (!/^\/(api|stream|360|edu|scratch-edu)(?:\/|$)/.test(req.path)) return next();
     try {
-      const session = await fetch('https://xeroxyt-account.2026-97th.workers.dev/api/account/session', {
+      const session = await fetch('https://your-account-api.example/api/account/session', {
         headers: { cookie: req.headers.cookie || '' }, signal: AbortSignal.timeout(5000)
       });
       if (session.status === 401) return res.status(401).json({ error: 'ログインが必要です。' });
@@ -2961,7 +2961,7 @@ async function startServer() {
       headers: Object.fromEntries(original.headers.entries()),
       ...(original.method === 'POST' ? { body: await original.text() } : {}),
     };
-    return fetch('https://xeroxyt-stream-proxy.2026-97th.workers.dev/fetch', {
+    return fetch('https://your-stream-proxy.example/fetch', {
       method: 'POST', headers: { 'Content-Type': 'application/json', cookie },
       body: JSON.stringify(payload), signal: AbortSignal.timeout(40000),
     });
@@ -3016,7 +3016,7 @@ async function startServer() {
 
     try {
       const resp = await axios.get(
-        `https://min-plum.vercel.app/360/${encodeURIComponent(videoId)}`,
+        `https://your-player.example/360/${encodeURIComponent(videoId)}`,
         {
           timeout: 10000,
           responseType: "text",
