@@ -15,7 +15,7 @@ source = source.replace('const appPromise = startServer();\nexport default appPr
 source = source.replace('const dailyQuotaMap = new Map<string, ClientDailyRecord>();', 'const dailyQuotaMap = sharedQuota;');
 source = source.replace('const authFlows = new Map<string, { flow: any; expires: number }>();', 'const authFlows = flowStore;');
 source = source.replaceAll('authFlows.get(', 'await authFlows.get(').replaceAll('authFlows.set(', 'await authFlows.set(').replaceAll('authFlows.delete(', 'await authFlows.delete(');
-source = source.replace("const session = await fetch('https://xeroxyt-account.2026-97th.workers.dev/api/account/session',", "const session = await env.ACCOUNT.fetch('https://account.internal/api/account/session',");
+source = source.replace("const session = await fetch(new URL('/api/account/session', env.ACCOUNT_API_URL).href,", "const session = await env.ACCOUNT.fetch('https://account.internal/api/account/session',");
 // Fail closed if a future server refactor leaves startup or bundled credentials behind.
 if (/app\.listen\(|setInterval\(|export default|RAPIDAPI_KEY_[123] \|\|/.test(source)) throw new Error('Workers adaptation incomplete; inspect server.ts changes.');
 if (staticStart < 0 || staticEnd < 0) throw new Error('Static server section was not found.');

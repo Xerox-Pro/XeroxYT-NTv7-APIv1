@@ -440,7 +440,7 @@ async function startServer() {
   app.use(async (req, res, next) => {
     if (!/^\/(api|stream|360|edu|scratch-edu)(?:\/|$)/.test(req.path)) return next();
     try {
-      const session = await fetch('https://xeroxyt-account.2026-97th.workers.dev/api/account/session', {
+      const session = await fetch(new URL('/api/account/session', process.env.ACCOUNT_API_URL).href, {
         headers: { cookie: req.headers.cookie || '' }, signal: AbortSignal.timeout(15000)
       });
       if (session.status === 401) return res.status(401).json({ error: 'ログインが必要です。' });

@@ -2,7 +2,7 @@
 
 **XeroxYT-NTv6という動画視聴WebサイトのバックエンドAPI**です。検索・動画情報・Shorts・コメント・チャンネル・サイトアカウント・視聴履歴をCloudflare Workers/D1で提供します。サイト画面は含みません。
 
-フロントエンド: https://github.com/Xerox-Pro/XeroxYT-NTv6
+フロントエンド: https://github.com/YOUR_ACCOUNT/XeroxYT-NTv6
 
 ## 必ずAPIとフロントの両方を設定してください
 
@@ -45,7 +45,7 @@ npm run deploy
 VercelのSettings → Environment Variablesへ設定後、再デプロイします。
 
 ```dotenv
-API_BASE_URL=https://xeroxyt-ntv6-apiv1.your-subdomain.workers.dev
+API_BASE_URL=https://your-api.your-subdomain.workers.dev
 ```
 
 末尾の `/` と `/api` は付けません。Preview/Productionそれぞれの変数と、それぞれの正確なURLをALLOWED_ORIGINSに設定します。URLが増えたらAPI側も更新してください。
@@ -142,3 +142,5 @@ Node起動の `/health` とCORS/未認証拒否はローカルで検証してい
 ブラウザーは秘密鍵を持たないため、秘密鍵必須時の直接接続は拒否されます。フロントの自動モードはサーバー経由へ切り替わります。直接接続を許可したい場合に限りREQUIRE_PROXY_SECRET=falseにできますが、その場合Originは偽装可能で、他サーバーからの呼び出しをOriginだけで完全に防ぐことはできません。
 
 RenderはHTTPのhealthCheckPathを設定せず、TCPの起動確認を使用します。APIの `/health` を外から確認する場合も、許可Originと共有鍵が必要です。サイト経由の `/api/health` はゲートウェイが必要なヘッダーを付けます。
+
+実際のデプロイURL・許可Origin・共有キーはホスティング側の環境変数で設定してください。このリポジトリのURLはすべて例示用です。個人の接続先をコミットしないでください。
