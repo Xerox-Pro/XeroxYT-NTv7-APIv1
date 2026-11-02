@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: xeroxyt-nt-v6-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: LIMIT_SECRET
+        sync: false
