@@ -1,0 +1,24 @@
+{
+  "name": "xeroxyt-ntv6-apiv1",
+  "main": "cloudflare/api/bundle.mjs",
+  "no_bundle": true,
+  "compatibility_date": "2026-11-02",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "xeroxyt-accounts",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+    }
+  ],
+  "vars": {
+    "NODE_ENV": "production",
+    "ALLOWED_ORIGINS": "https://your-frontend.vercel.app"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  }
+}

@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: xeroxyt-ntv6-apiv1
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ACCOUNT_API_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false

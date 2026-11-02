@@ -1,0 +1,29 @@
+{
+  "name": "xeroxyt-ntv6-apiv1",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Cloudflare Workers backend for XeroxYT-NTv6",
+  "scripts": {
+    "build": "node cloudflare/api/build.mjs",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "db:migrate": "wrangler d1 execute xeroxyt-accounts --remote --file schema.sql",
+    "start": "node dist/node.mjs",
+    "vercel-build": "npm run build",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "axios": "^1.19.0",
+    "youtubei.js": "^18.0.0",
+    "@google/genai": "^2.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "wrangler": "^4.156.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

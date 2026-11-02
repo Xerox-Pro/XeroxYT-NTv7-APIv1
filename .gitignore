@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+.dev.vars*
+.env*
+cloudflare/api/bundle.mjs
+dist/
+!.env.example

@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS api_oauth_flows (user_id TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at INTEGER NOT NULL);
