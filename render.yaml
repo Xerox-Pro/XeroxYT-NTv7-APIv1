@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: xeroxyt-ntv6-apiv1
+    name: xeroxyt-ntv7-apiv1
     runtime: node
     plan: free
     buildCommand: npm ci && npm run build

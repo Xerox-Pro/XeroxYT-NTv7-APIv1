@@ -1,9 +1,9 @@
 {
-  "name": "xeroxyt-ntv6-apiv1",
+  "name": "xeroxyt-ntv7-apiv1",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Cloudflare Workers backend for XeroxYT-NTv6",
+  "description": "Cloudflare Workers backend for XeroxYT-NTv7",
   "scripts": {
     "build": "node cloudflare/api/build.mjs",
     "dev": "npm run build && wrangler dev",

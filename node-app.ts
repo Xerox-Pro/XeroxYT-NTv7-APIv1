@@ -23,7 +23,7 @@ app.use((req,res,next)=>{
  if(req.method==='OPTIONS'){res.status(origin&&allowed.includes(origin)?204:403).end();return;}
  next();
 });
-app.get('/health',(_req,res)=>res.json({ok:true,runtime:'node',implementation:'XeroxYT-NTv6-APIv1'}));
+app.get('/health',(_req,res)=>res.json({ok:true,runtime:'node',implementation:'XeroxYT-NTv7-APIv1'}));
 app.use(async(req,res,next)=>{
  if(!(database ? /^\/api\/account(\/|$)/ : /^\/api\/(account|auth)(\/|$)/).test(req.path))return next();
  try{const headers=new Headers();for(const name of ['cookie','content-type','origin','referer']){const v=req.headers[name];if(typeof v==='string')headers.set(name,v);}

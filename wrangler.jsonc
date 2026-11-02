@@ -1,5 +1,5 @@
 {
-  "name": "xeroxyt-ntv6-apiv1",
+  "name": "xeroxyt-ntv7-apiv1",
   "main": "cloudflare/api/bundle.mjs",
   "no_bundle": true,
   "compatibility_date": "2026-11-02",

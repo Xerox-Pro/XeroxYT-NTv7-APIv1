@@ -1,8 +1,8 @@
-# XeroxYT-NTv6-APIv1
+# XeroxYT-NTv7-APIv1
 
-**XeroxYT-NTv6という動画視聴WebサイトのバックエンドAPI**です。検索・動画情報・Shorts・コメント・チャンネル・サイトアカウント・視聴履歴をCloudflare Workers/D1で提供します。サイト画面は含みません。
+**XeroxYT-NTv7という動画視聴WebサイトのバックエンドAPI**です。検索・動画情報・Shorts・コメント・チャンネル・サイトアカウント・視聴履歴をCloudflare Workers/D1で提供します。サイト画面は含みません。
 
-フロントエンド: https://github.com/YOUR_ACCOUNT/XeroxYT-NTv6
+フロントエンド: https://github.com/YOUR_ACCOUNT/XeroxYT-NTv7
 
 ## 必ずAPIとフロントの両方を設定してください
 
