@@ -3141,7 +3141,12 @@ async function startServer() {
       return res.json(videoData);
     } catch (err) {
       console.error("Video API error:", err);
-      res.status(404).json({ error: "Video not found" });
+      // A temporary upstream error must allow the gateway to try the next API.
+      const message = String((err as any)?.message || err);
+      const unavailable = /\b(video unavailable|video not found|does not exist|private video|removed video)\b/i.test(message);
+      res.status(unavailable ? 404 : 502).json({
+        error: unavailable ? "Video not found" : "動画情報の取得に一時的に失敗しました。",
+      });
     }
   });
 
