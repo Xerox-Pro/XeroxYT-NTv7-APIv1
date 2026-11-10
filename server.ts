@@ -1,9 +1,10 @@
+import { registerFilteredSearch } from "./filtered-search.mjs";
 import express from "express";
 import { registerShortsRoutes, normalizeShort } from "./shorts.mjs";
 import { registerRankingRoute } from "./shorts-ranking.mjs";
 import path from "path";
 import crypto from "crypto";
-import { Innertube, UniversalCache } from "youtubei.js";
+import { Innertube, UniversalCache, YT, YTNodes } from "youtubei.js";
 import axios from "axios";
 
 // Suppress noisy youtubei.js internal logs
@@ -2500,125 +2501,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/search", async (req, res) => {
-    const q = (req.query.q as string) || "";
-    const page = parseInt((req.query.page as string) || "1", 10);
-    const filterType = (req.query.type as string) || "all"; // 'all' | 'channel' | 'video'
-
-    if (!q.trim()) {
-      return res.json({ videos: [], channels: [] });
-    }
-
-    const searchQuery = page > 1 ? `${q} ${page}` : q;
-    const cacheKey = `search:${searchQuery.toLowerCase().trim()}:${filterType}`;
-    const cached = getFromMemoryCache<any>(cacheKey);
-    if (cached) {
-      res.setHeader("Cache-Control", "public, s-maxage=1800, stale-while-revalidate=86400");
-      return res.json(cached);
-    }
-
-    try {
-      const youtube = await getYt();
-
-      console.log(`[Search] Query: ${searchQuery}, Page: ${page}, Type: ${filterType}`);
-
-      const searchPromises: Promise<any>[] = [];
-
-      // 動画検索（filterType !== 'channel' の場合）
-      if (filterType !== "channel") {
-        searchPromises.push(
-          youtube.search(searchQuery, { type: "video" }).catch((err) => {
-            console.warn("[Search] Video search error:", err?.message || err);
-            return null;
-          })
-        );
-      } else {
-        searchPromises.push(Promise.resolve(null));
-      }
-
-      // チャンネル検索（filterType !== 'video' かつ page 1 の場合）
-      if (filterType !== "video" && page === 1) {
-        searchPromises.push(
-          youtube.search(q, { type: "channel" }).catch((err) => {
-            console.warn("[Search] Channel search error:", err?.message || err);
-            return null;
-          })
-        );
-      } else {
-        searchPromises.push(Promise.resolve(null));
-      }
-
-      const [videoSearch, channelSearch] = await Promise.all(searchPromises);
-
-      // 動画のフォーマット
-      let videos: any[] = [];
-      if (videoSearch) {
-        let rawResults: any[] = [];
-        if (videoSearch.videos && videoSearch.videos.length > 0) {
-          rawResults = videoSearch.videos;
-        } else if (videoSearch.results && videoSearch.results.length > 0) {
-          rawResults = videoSearch.results.filter(
-            (r: any) =>
-              r.type === "Video" ||
-              r.type === "Playlist" ||
-              r.type === "Mix" ||
-              r.id,
-          );
-        }
-
-        if (videoSearch.playlists && videoSearch.playlists.length > 0) {
-          rawResults = [...rawResults, ...videoSearch.playlists];
-        }
-
-        videos = rawResults
-          .map((v: any) => formatVideoObject(v))
-          .filter((v) => v !== null);
-      }
-
-      // チャンネルのフォーマット
-      let channels: any[] = [];
-      if (channelSearch) {
-        let rawChannels: any[] = [];
-        if (channelSearch.channels && channelSearch.channels.length > 0) {
-          rawChannels = channelSearch.channels;
-        } else if (channelSearch.results && channelSearch.results.length > 0) {
-          rawChannels = channelSearch.results.filter(
-            (r: any) => r.type === "Channel" || r.type === "ChannelView"
-          );
-        }
-
-        channels = rawChannels
-          .map((ch: any) => formatSearchChannel(ch))
-          .filter((ch) => ch !== null);
-      }
-
-      console.log(`[Search] Formatted: ${videos.length} videos, ${channels.length} channels`);
-
-      const result = {
-        videos,
-        channels,
-      };
-
-      if (videos.length > 0 || channels.length > 0) {
-        setToMemoryCache(cacheKey, result, 15 * 60 * 1000);
-        res.setHeader("Cache-Control", "public, s-maxage=1800, stale-while-revalidate=86400");
-        return res.json(result);
-      }
-
-      res.setHeader("Cache-Control", "public, s-maxage=600, stale-while-revalidate=86400");
-      res.json({ videos: [], channels: [] });
-    } catch (err) {
-      console.error("Search API error:", err);
-      res
-        .status(500)
-        .json({
-          error:
-            "検索結果の取得に失敗しました。時間をおいて再度お試しください。",
-          videos: [],
-          channels: [],
-        });
-    }
-  });
+  registerFilteredSearch(app, { getYt, formatVideoObject, formatSearchChannel, Search: YT.Search, ContinuationItem: YTNodes.ContinuationItem });
 
   // チャンネル個別検索専用API
   app.get("/api/search/channels", async (req, res) => {
