@@ -1,3 +1,4 @@
+import {fetchPublicWatchNext} from "./watch-next.mjs";
 import { registerYouTubeAccount } from "./youtube-account.mjs";
 import { registerFilteredSearch } from "./filtered-search.mjs";
 import express from "express";
@@ -637,11 +638,8 @@ async function startServer() {
     );
 
     if (isVideoViewRequest) {
-      // 15本までは通常カウント。15本以降はプレイヤーのみ取得モードで再生を許可 (検索や動画再生を429で止めない)
+      // Count usage without replacing metadata or related videos with placeholders.
       record.videos++;
-      if (record.videos > DAILY_VIDEO_LIMIT) {
-        res.setHeader("X-Player-Only-Mode", "true");
-      }
     }
 
     // 4. 検索リクエスト判定 (/api/search, /api/search/channels)
@@ -672,9 +670,6 @@ async function startServer() {
     res.setHeader("X-RateLimit-Searches-Remaining", String(Math.max(0, DAILY_SEARCH_LIMIT - record.searches)));
     res.setHeader("X-RateLimit-Reset-Seconds", String(getSecondsUntilJstMidnight()));
     res.setHeader("X-Daily-Usage-Token", token);
-    if (record.videos >= DAILY_VIDEO_LIMIT) {
-      res.setHeader("X-Player-Only-Mode", "true");
-    }
     res.setHeader(
       "Access-Control-Expose-Headers",
       "X-RateLimit-Videos-Remaining, X-RateLimit-Searches-Remaining, X-RateLimit-Reset-Seconds, X-Daily-Usage-Token, X-Player-Only-Mode"
@@ -2296,35 +2291,11 @@ async function startServer() {
 
   app.get("/api/video/:id", async (req, res) => {
     const videoId = req.params.id;
-    const cacheKey = `video:v3:${videoId}`;
+    const cacheKey = `video:v4:${videoId}`;
     const cached = getFromMemoryCache<any>(cacheKey);
     if (cached) {
       res.setHeader("Cache-Control", cached.isLive || cached.isUpcoming ? "no-store" : "public, s-maxage=7200, stale-while-revalidate=86400");
       return res.json(cached);
-    }
-
-    const clientId = getClientIdentifier(req);
-    const today = getJstDateString();
-    const record = getOrCreateRecord(clientId, today, req);
-    if (record.videos > DAILY_VIDEO_LIMIT) {
-      // 1日の上限(15本)以降は重いメタデータ取得を行わず、プレイヤー再生に必要な軽量情報のみ返却 (プレイヤー以外取得しない)
-      res.setHeader("X-Player-Only-Mode", "true");
-      res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
-      return res.json({
-        videoId,
-        title: "YouTube Video",
-        description: "",
-        author: "YouTube",
-        authorId: "",
-        publishedText: "直接再生",
-        viewCount: 0,
-        lengthSeconds: 0,
-        videoThumbnails: [{ url: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`, width: 480, height: 360 }],
-        recommendedVideos: [],
-        comments: [],
-        isPlayerOnly: true,
-        type: "video"
-      });
     }
 
     try {
@@ -2408,6 +2379,8 @@ async function startServer() {
         })
         .filter(Boolean);
 
+      let watchNextFallback:any=null;
+      if(!recs.length){try{watchNextFallback=await fetchPublicWatchNext(youtube,videoId);recs.push(...extractVideosFromFeed(watchNextFallback,videoId));}catch{console.warn('[Related] Independent watch-next request failed');}}
       const owner = secondary?.owner;
       const authorAvatar =
         (owner?.author as any)?.thumbnails?.[0]?.url ||
@@ -2475,7 +2448,7 @@ async function startServer() {
       relatedVideosSessions.set(`${videoId}:related`, {
         videoId,
         currentPage: 1,
-        feed: info,
+        feed: watchNextFallback || info,
         pages: new Map([[1, recs]]),
         hasMore: true,
         lastAccess: Date.now(),
@@ -2486,7 +2459,7 @@ async function startServer() {
       return res.json(videoData);
     } catch (err) {
       console.error("Video API error:", err);
-      res.status(404).json({ error: "Video not found" });
+      res.status(502).json({ error: "動画情報を取得できませんでした。再試行してください。",code:"VIDEO_METADATA_UNAVAILABLE" });
     }
   });
 
@@ -2571,19 +2544,6 @@ async function startServer() {
     const videoId = req.params.id;
     const sort = ((req.query.sort as string) || "top").toLowerCase() === "newest" ? "newest" : "top";
     const page = Math.max(1, parseInt((req.query.page as string) || "1", 10));
-
-    const clientId = getClientIdentifier(req);
-    const today = getJstDateString();
-    const record = getOrCreateRecord(clientId, today, req);
-    if (record.videos > DAILY_VIDEO_LIMIT) {
-      // 15本以降はコメントを取得しない (プレイヤー以外取得しない)
-      return res.json({
-        page: 1,
-        comments: [],
-        hasMore: false,
-        isPlayerOnly: true,
-      });
-    }
 
     const cacheKey = `comments:${videoId}:${sort}:${page}`;
     const cached = getFromMemoryCache<any>(cacheKey);
@@ -2674,19 +2634,6 @@ async function startServer() {
     const page = Math.max(1, parseInt((req.query.page as string) || "1", 10));
     const filter = (req.query.filter as string) || "all";
 
-    const clientId = getClientIdentifier(req);
-    const today = getJstDateString();
-    const record = getOrCreateRecord(clientId, today, req);
-    if (record.videos > DAILY_VIDEO_LIMIT) {
-      // 15本以降は関連動画を取得しない (プレイヤー以外取得しない)
-      return res.json({
-        page: 1,
-        videos: [],
-        hasMore: false,
-        isPlayerOnly: true,
-      });
-    }
-
     const cacheKey = `related:${videoId}:${page}:${filter}`;
     const cached = getFromMemoryCache<any>(cacheKey);
     if (cached) {
@@ -2731,7 +2678,8 @@ async function startServer() {
           info = await youtube.getBasicInfo(videoId).catch(() => null);
         }
 
-        const page1Recs = extractVideosFromFeed(info, videoId);
+        let page1Recs = extractVideosFromFeed(info, videoId);
+        if(!page1Recs.length){try{info=await fetchPublicWatchNext(youtube,videoId);page1Recs=extractVideosFromFeed(info,videoId);}catch{console.warn('[Related] Independent watch-next request failed');}}
         session = {
           videoId,
           currentPage: 1,
