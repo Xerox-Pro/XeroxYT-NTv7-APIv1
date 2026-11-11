@@ -4,7 +4,7 @@ const lifetime=90*86400000;
 export function credentialVault(secret){
  if(!secret||secret.length<16)throw new Error('YouTube連携のサーバー設定が不足しています。');
  const key=createHash('sha256').update('xerox-youtube-link-v1\0'+secret).digest();
- return {seal(value,user){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);cipher.setAAD(Buffer.from(user));const data=Buffer.concat([cipher.update(JSON.stringify(value)),cipher.final()]);return {iv:iv.toString('base64'),data:data.toString('base64'),tag:cipher.getAuthTag().toString('base64')};},open(value,user){const cipher=createDecipheriv('aes-256-gcm',key,Buffer.from(value.iv,'base64'));cipher.setAAD(Buffer.from(user));cipher.setAuthTag(Buffer.from(value.tag,'base64'));return JSON.parse(Buffer.concat([cipher.update(Buffer.from(value.data,'base64')),cipher.final()]).toString());}};
+ return {seal(value,user){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);cipher.setAAD(Buffer.from(user));const data=Buffer.concat([cipher.update(Buffer.from(JSON.stringify(value),'utf8')),cipher.final()]);return {iv:iv.toString('base64'),data:data.toString('base64'),tag:cipher.getAuthTag().toString('base64')};},open(value,user){const cipher=createDecipheriv('aes-256-gcm',key,Buffer.from(value.iv,'base64'));cipher.setAAD(Buffer.from(user));cipher.setAuthTag(Buffer.from(value.tag,'base64'));return JSON.parse(Buffer.concat([cipher.update(Buffer.from(value.data,'base64')),cipher.final()]).toString());}};
 }
 const text=value=>typeof value==='string'?value:value?.text||value?.toString?.()||'';
 function profile(info){const list=info?.contents?.contents||[];const account=list.find(item=>item.is_selected)||list.find(item=>item.account_name);return {name:text(account?.account_name)||text(info?.contents?.header?.title)||'YouTube アカウント',picture:account?.account_photo?.[0]?.url||'',email:'',sub:account?.endpoint?.payload?.browseId||'',handle:text(account?.channel_handle)};}
@@ -19,7 +19,11 @@ export function registerYouTubeAccount(app,{store,secret,createClient,formatVide
   try{await yt.session.signIn(session.credentials);}catch{throw Object.assign(new Error('YouTube連携の有効期限が切れました。再連携してください。'),{status:401,code:'YOUTUBE_REAUTH_REQUIRED'});}
   await persist();try{return await work(yt,session);}finally{await persist();}
  };
- const sendError=(res,error)=>res.status(error.status||502).json({error:error.status?error.message:'YouTube側がこの機能に応答しませんでした。TVクライアントで未対応の場合があります。',code:error.code||'YOUTUBE_FEATURE_UNAVAILABLE'});
+ const sendError=(res,error)=>{
+  // Never log provider messages: they can contain account credentials or request bodies.
+  console.warn(JSON.stringify({event:'youtube_account_error',name:error.name||'Error',code:error.code||'YOUTUBE_REQUEST_FAILED',status:error.status||502}));
+  return res.status(error.status||502).json({error:error.status?error.message:'YouTubeとの通信に失敗しました。時間をおいて再試行してください。',code:error.status?error.code||'YOUTUBE_REQUEST_FAILED':'YOUTUBE_REQUEST_FAILED'});
+ };
  const route=(method,path,work)=>app[method](path,async(req,res)=>{res.setHeader('Cache-Control','private, no-store');try{const result=await work(req,res,res.locals.siteAccountId);if(!res.headersSent)res.json(result);}catch(error){sendError(res,error);}});
  const google=async(path,body)=>{const response=await fetcher('https://oauth2.googleapis.com/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(10000)});const data=await response.json();return {ok:response.ok,data};};
  route('get','/api/auth/status',async(req,res,id)=>{const link=await read(id);return {connected:!!link,user:link?.user||null,client:'TV',limitations:'Google OAuthはTVクライアントに対応しています。YouTube側の対応状況によって利用できない機能があります。'};});
