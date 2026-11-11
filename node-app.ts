@@ -25,7 +25,7 @@ app.use((req,res,next)=>{
 });
 app.get('/health',(_req,res)=>res.json({ok:true,runtime:'node',implementation:'XeroxYT-NTv7-APIv1'}));
 app.use(async(req,res,next)=>{
- if(!(database ? /^\/api\/account(\/|$)/ : /^\/api\/(account|auth)(\/|$)/).test(req.path))return next();
+ if(!(database ? /^\/api\/account(\/|$)/ : /^\/api\/(account|auth|user)(\/|$)/).test(req.path))return next();
  try{const headers=new Headers();for(const name of ['cookie','content-type','origin','referer']){const v=req.headers[name];if(typeof v==='string')headers.set(name,v);}
  const body=['GET','HEAD'].includes(req.method)?undefined:await new Promise<Buffer>((resolve,reject)=>{const chunks:Buffer[]=[];let size=0;req.on('data',chunk=>{size+=chunk.length;if(size>131072){reject(new Error('Payload too large'));req.destroy();}else chunks.push(chunk);});req.on('end',()=>resolve(Buffer.concat(chunks)));req.on('error',reject);});
  const response=await accountFetch('https://account.internal'+req.originalUrl,{method:req.method,headers,body});
