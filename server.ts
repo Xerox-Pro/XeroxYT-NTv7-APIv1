@@ -1,3 +1,4 @@
+import {createCommentPages,readCommentPage} from "./comment-pages.mjs";
 import {playlistCard,readYouTubeMix} from "./youtube-mix.mjs";
 import {fetchPublicWatchNext} from "./watch-next.mjs";
 import { registerYouTubeAccount } from "./youtube-account.mjs";
@@ -2420,6 +2421,9 @@ async function startServer() {
     pages: Map<number, any[]>;
     hasMore: boolean;
     lastAccess: number;
+    buffer:any[];
+    seen:Set<string>;
+    pending?:Promise<any>;
   }
   const commentsSessions = new Map<string, CommentsSession>();
 
@@ -2493,7 +2497,8 @@ async function startServer() {
     const sort = ((req.query.sort as string) || "top").toLowerCase() === "newest" ? "newest" : "top";
     const page = Math.max(1, parseInt((req.query.page as string) || "1", 10));
 
-    const cacheKey = `comments:${videoId}:${sort}:${page}`;
+    const cacheKey = `comments:v2:20:${videoId}:${sort}:${page}`;
+    if(!Number.isSafeInteger(page)||page>200)return res.status(400).json({error:"コメントのページ番号が無効です。"});
     const cached = getFromMemoryCache<any>(cacheKey);
     if (cached) {
       res.setHeader("Cache-Control", "public, s-maxage=1800, stale-while-revalidate=86400");
@@ -2533,37 +2538,13 @@ async function startServer() {
         const sortBy = sort === "newest" ? "NEWEST_FIRST" : "TOP_COMMENTS";
         let commentsData = await youtube.getComments(videoId, sortBy);
         
-        let initialComments = parseCommentsList(commentsData?.contents || []);
-        session = {
-          videoId,
-          sort,
-          currentPage: 1,
-          feed: commentsData,
-          pages: new Map([[1, initialComments]]),
-          hasMore: Boolean(commentsData?.has_continuation),
-          lastAccess: now,
-        };
+        session = {videoId,sort,...createCommentPages(commentsData,parseCommentsList),lastAccess:now};
         commentsSessions.set(sessionKey, session);
       }
 
-      // ページが進んでいる場合は Continuation をループ実行
-      if (session && session.currentPage < page) {
-        while (session.currentPage < page && session.feed?.has_continuation) {
-          session.feed = await session.feed.getContinuation();
-          session.currentPage++;
-          const nextComments = parseCommentsList(session.feed?.contents || []);
-          session.pages.set(session.currentPage, nextComments);
-          session.hasMore = Boolean(session.feed?.has_continuation);
-        }
-      }
-
       session.lastAccess = now;
-      const pageComments = session.pages.get(page) || [];
-      const result = {
-        page,
-        comments: pageComments,
-        hasMore: page < session.currentPage || session.hasMore,
-      };
+      const result = await readCommentPage(session,page,parseCommentsList);
+      const pageComments=result.comments;
 
       if (pageComments.length > 0) {
         setToMemoryCache(cacheKey, result, 15 * 60 * 1000);
