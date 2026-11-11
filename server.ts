@@ -1,3 +1,4 @@
+import {optimizePublicVideoReads} from "./public-video-reads.mjs";
 import {createCommentPages,readCommentPage} from "./comment-pages.mjs";
 import {playlistCard,readYouTubeMix} from "./youtube-mix.mjs";
 import {fetchPublicWatchNext} from "./watch-next.mjs";
@@ -60,7 +61,7 @@ async function getYt() {
           retrieve_player: false,
         });
         
-        yt = instance;
+        yt = optimizePublicVideoReads(instance);
         console.log("[YT] Innertube initialized successfully");
         return instance;
       } catch (err) {
