@@ -2748,7 +2748,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/mix/:id',async(req,res)=>{try{const result=await readYouTubeMix(await getYt(),req.params.id,String(req.query.videoId||''));res.setHeader('Cache-Control','private, no-store');res.json(result);}catch(error:any){res.status(error.status||502).json({error:error.message||'ミックスリストを取得できませんでした。'});}});
+  app.get('/api/mix/:id',async(req,res)=>{try{const result=await readYouTubeMix(await getYt(),req.params.id,String(req.query.videoId||''),String(req.query.continuation||''));res.setHeader('Cache-Control','private, no-store');res.json(result);}catch(error:any){res.status(error.status||502).json({error:error.message||'ミックスリストを取得できませんでした。'});}});
   // YouTube プレイリスト取得 API
   app.get("/api/playlist/:id", async (req, res) => {
     const playlistId = req.params.id;
