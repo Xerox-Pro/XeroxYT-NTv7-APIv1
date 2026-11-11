@@ -22,10 +22,22 @@ test('real YouTube.js sends the signed-in bearer token with TV client context to
  const result=await readYouTubeFeed(yt,'home');assert.equal(requests,1);assert.equal(result.videos.length,1);assert.ok(!JSON.stringify(result).includes('test-private-access'));
 });
 
-test('a small personalized home page is filled from additional pages up to 24 unique videos',async()=>{
+test('a small personalized home page is filled from additional pages up to 36 unique videos',async()=>{
  let calls=0;const yt={actions:{execute:async()=>{const page=calls++;return {data:{contents:Array.from({length:8},(_,i)=>lockup(String(page*8+i).padStart(11,'a'))),continuations:[{nextContinuationData:{continuation:'page-'+calls}}]}};}}};
- const result=await readYouTubeFeed(yt,'home');assert.equal(result.videos.length,24);assert.equal(calls,3);assert.equal(result.hasMore,true);
+ const result=await readYouTubeFeed(yt,'home');assert.equal(result.videos.length,40);assert.equal(calls,5);assert.equal(result.hasMore,true);
 });
 test('a failure on an additional page preserves loaded videos and a cursor for retry',async()=>{
  let calls=0;const yt={actions:{execute:async()=>{if(calls++)throw new Error('offline');return {data:{contents:[lockup('abcdefghijk')],continuations:[{nextContinuationData:{continuation:'retry'}}]}};}}};const result=await readYouTubeFeed(yt,'home');assert.equal(result.videos.length,1);assert.equal(result.hasMore,true);assert.deepEqual(JSON.parse(Buffer.from(result.continuation,'base64url')).tokens,['retry']);
+});
+test('TV tile metadata provides titles, author, thumbnails and duration',()=>{
+ const node={tileRenderer:{
+  metadata:{tileMetadataRenderer:{title:{simpleText:'正しいホームのタイトル'},lines:[{lineRenderer:{items:[{lineItemRenderer:{text:{simpleText:'投稿者'}}}]}}]}},
+  onSelectCommand:{watchEndpoint:{videoId:'abcdefghijk'}},
+  header:{tileHeaderRenderer:{thumbnail:{thumbnails:[{url:'https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg'}]},thumbnailOverlays:[{thumbnailOverlayTimeStatusRenderer:{text:{simpleText:'12:34'}}}]}}
+ }};
+ const r=decodeYouTubeFeed(node);assert.equal(r.videos[0].title,'正しいホームのタイトル');assert.equal(r.videos[0].author,'投稿者');assert.equal(r.videos[0].lengthSeconds,754);
+ const shelf=decodeYouTubeFeed({shelfRenderer:{title:{simpleText:'Shorts'},content:{items:[node]}}});assert.equal(shelf.videos[0].isShort,true);assert.equal(r.videos[0].isShort,undefined);
+});
+test('raw Shorts onTap is read even when the entity ID is not a video ID',()=>{
+ const r=decodeYouTubeFeed({shortsLockupViewModel:{entityId:'opaque-entity-id',onTap:{innertubeCommand:{reelWatchEndpoint:{videoId:'abcdefghijk'}}},overlayMetadata:{primaryText:{content:'本来のショートタイトル'}}}});assert.equal(r.videos[0]?.videoId,'abcdefghijk');assert.equal(r.videos[0]?.title,'本来のショートタイトル');
 });
