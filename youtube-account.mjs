@@ -17,7 +17,7 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
   const session=await read(id);if(!session)throw Object.assign(new Error('Googleアカウントを連携してください。'),{status:401,code:'YOUTUBE_NOT_LINKED'});
   const yt=await createClient();let saved=JSON.stringify(session.credentials);
   const persist=async()=>{const credentials=yt.session.oauth.oauth2_tokens;if(!credentials||JSON.stringify(credentials)===saved)return;const current=await read(id);if(current?.credentials?.refresh_token!==session.credentials.refresh_token)throw Object.assign(new Error('YouTubeの連携状態が変わりました。開き直してください。'),{status:409});await save(id,{...session,credentials});saved=JSON.stringify(credentials);};
-  try{await yt.session.signIn(session.credentials);}catch{throw Object.assign(new Error('YouTube連携の有効期限が切れました。再連携してください。'),{status:401,code:'YOUTUBE_REAUTH_REQUIRED'});}
+  try{await yt.session.signIn(session.credentials);}catch(error){const permanent=/Invalid tokens provided|Failed to refresh access token: (400|401)\b/.test(error.message||'');throw Object.assign(new Error(permanent?'YouTube連携が無効になりました。再連携してください。':'YouTubeの認証確認に一時的に失敗しました。連携は保持しています。再試行してください。'),{status:permanent?401:503,code:permanent?'YOUTUBE_REAUTH_REQUIRED':'YOUTUBE_AUTH_TEMPORARY'});}
   await persist();try{return await work(yt,{...session,siteId:id});}finally{await persist();}
  };
  const sendError=(res,error)=>{
