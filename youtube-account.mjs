@@ -1,3 +1,4 @@
+import {readYouTubeFeed} from './youtube-feed.mjs';
 import {createHash,randomBytes,randomUUID,createCipheriv,createDecipheriv} from 'node:crypto';
 import {collectShorts} from './shorts.mjs';
 const lifetime=90*86400000;
@@ -51,23 +52,15 @@ export function registerYouTubeAccount(app,{store,secret,createClient,formatVide
  });
  route('post','/api/auth/cancel',async(req,res,id)=>{await store.delete('youtube-flow:'+id);return {success:true};});
  route('post','/api/auth/logout',async(req,res,id)=>{await store.delete('youtube:'+id);await store.delete('youtube-flow:'+id);return {success:true};});
- function videos(feed){const result=new Map();for(const item of [...(feed?.videos||[]),...(feed?.playlists||[]),...(feed?.memo?.values?.()||[])].flat()){const v=formatVideo(item);if(v&&(/^[\w-]{11}$/.test(v.videoId||'')||/^[\w-]{2,150}$/.test(v.playlistId||'')))result.set(v.playlistId||v.videoId,v);}return [...result.values()];}
- function continuation(feed){return feed?.memo?.getType(ContinuationItem)?.find(item=>item.endpoint?.payload?.token)?.endpoint.payload.token||'';}
- const getFeed=async(yt,kind,req)=>{
-  const token=String(req.query.continuation||'');if(token.length>20000)throw Object.assign(new Error('続きの情報が長すぎます。'),{status:400});
-  if(token){const response=await yt.actions.execute('/browse',{continuation:token});return new Feed(yt.actions,response);}
-  if(kind==='home'||kind==='shorts')return yt.getHomeFeed();
-  if(kind==='history')return yt.getHistory();if(kind==='subscriptions')return yt.getSubscriptionsFeed();
-  if(kind==='liked')return yt.getPlaylist('LL');if(kind==='watch-later')return yt.getPlaylist('WL');
-  if(kind==='playlists')return yt.getPlaylists();throw Object.assign(new Error('不明なフィードです。'),{status:400});
- };
  route('get','/api/user/feed/:kind',async(req,res,id)=>run(id,async yt=>{
-  const kind=req.params.kind,feed=await getFeed(yt,kind,req);const token=continuation(feed);
-  const result=kind==='shorts'?collectShorts(feed):videos(feed);
-  return {videos:result,continuation:token,hasMore:!!token,source:'youtube',personalized:['home','shorts','subscriptions'].includes(kind),...(kind==='shorts'?{sourceDescription:'GoogleアカウントのホームにあるShorts'}:{})};
+  const kind=req.params.kind,result=await readYouTubeFeed(yt,kind,String(req.query.continuation||''));
+  return {...result,videos:kind==='shorts'?result.videos.filter(v=>v.isShort):result.videos,...(kind==='shorts'?{sourceDescription:'GoogleアカウントのホームにあるShorts'}:{})};
  }));
- route('get','/api/user/playlist/:id',async(req,res,id)=>run(id,async yt=>{if(!/^[\w-]{2,150}$/.test(req.params.id))throw Object.assign(new Error('再生リストIDが無効です。'),{status:400});const feed=await yt.getPlaylist(req.params.id);return {id:req.params.id,title:text(feed.info?.title)||'YouTubeの再生リスト',description:text(feed.info?.description),videos:videos(feed),continuation:continuation(feed),hasMore:!!continuation(feed)};}));
- const reads={history:async yt=>videos(await yt.getHistory()),'liked-videos':async yt=>videos(await yt.getPlaylist('LL')),'watch-later':async yt=>videos(await yt.getPlaylist('WL')),playlists:async yt=>((await yt.getPlaylists()).playlists||[]).map(p=>({id:p.id||p.playlist_id,title:text(p.title),videoCount:text(p.video_count),thumbnails:p.thumbnails?.[0]?.url||''})),subscriptions:async yt=>{const feed=await yt.getChannelsFeed();return (feed.channels||[]).map(formatChannel).filter(Boolean);},'channel-info':async(yt,session)=>session.user,'notifications/unread-count':async yt=>({count:await yt.getUnseenNotificationsCount()}),notifications:async yt=>(await yt.getNotifications()).contents.map(n=>({id:n.notification_id,message:text(n.short_message),sentTime:text(n.sent_time),read:!!n.read,avatar:n.thumbnails?.[0]?.url||'',thumbnail:n.video_thumbnails?.[0]?.url||'',videoId:n.endpoint?.payload?.videoId||''}))};
+ route('get','/api/user/playlist/:id',async(req,res,id)=>run(id,async yt=>{
+  if(!/^[\w-]{2,150}$/.test(req.params.id))throw Object.assign(new Error('再生リストIDが無効です。'),{status:400});
+  const result=await readYouTubeFeed(yt,'playlist:'+req.params.id,String(req.query.continuation||''));return {...result,id:req.params.id,title:'YouTubeの再生リスト'};
+ }));
+ const reads={history:async yt=>(await readYouTubeFeed(yt,'history')).videos,'liked-videos':async yt=>(await readYouTubeFeed(yt,'liked')).videos,'watch-later':async yt=>(await readYouTubeFeed(yt,'watch-later')).videos,playlists:async yt=>(await readYouTubeFeed(yt,'playlists')).playlists,subscriptions:async yt=>(await readYouTubeFeed(yt,'channels')).channels,'channel-info':async(yt,session)=>session.user,'notifications/unread-count':async yt=>({count:await yt.getUnseenNotificationsCount()}),notifications:async yt=>(await yt.getNotifications()).contents.map(n=>({id:n.notification_id,message:text(n.short_message),sentTime:text(n.sent_time),read:!!n.read,avatar:n.thumbnails?.[0]?.url||'',thumbnail:n.video_thumbnails?.[0]?.url||'',videoId:n.endpoint?.payload?.videoId||''}))};
  for(const [path,work]of Object.entries(reads))route('get','/api/user/'+path,async(req,res,id)=>run(id,work));
  route('post','/api/user/action',async(req,res,id)=>{
   const {action,videoId,channelId,text:comment,playlistId,title,videoIds}=req.body||{};
