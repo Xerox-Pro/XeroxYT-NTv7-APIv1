@@ -1,3 +1,4 @@
+import {readYouTubeMix} from './youtube-mix.mjs';
 import {readYouTubeProfile} from './youtube-profile.mjs';
 import {readYouTubeFeed} from './youtube-feed.mjs';
 import {createHash,randomBytes,randomUUID,createCipheriv,createDecipheriv} from 'node:crypto';
@@ -54,8 +55,9 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
  route('post','/api/auth/logout',async(req,res,id)=>{await store.delete('youtube:'+id);await store.delete('youtube-flow:'+id);return {success:true};});
  route('get','/api/user/feed/:kind',async(req,res,id)=>run(id,async yt=>{
   const kind=req.params.kind,result=await readYouTubeFeed(yt,kind,String(req.query.continuation||''));
-  return {...result,videos:kind==='shorts'?result.videos.filter(v=>v.isShort):result.videos,...(kind==='shorts'?{sourceDescription:'GoogleアカウントのホームにあるShorts'}:{})};
+  return {...result,videos:kind==='shorts'?result.videos.filter(v=>v.isShort):kind==='home'?[...result.videos,...result.playlists]:result.videos,...(kind==='shorts'?{sourceDescription:'GoogleアカウントのホームにあるShorts'}:{})};
  }));
+ route('get','/api/user/mix/:id',async(req,res,id)=>run(id,yt=>readYouTubeMix(yt,req.params.id,String(req.query.videoId||''))));
  route('get','/api/user/playlist/:id',async(req,res,id)=>run(id,async yt=>{
   if(!/^[\w-]{2,150}$/.test(req.params.id))throw Object.assign(new Error('再生リストIDが無効です。'),{status:400});
   const result=await readYouTubeFeed(yt,'playlist:'+req.params.id,String(req.query.continuation||''));return {...result,id:req.params.id,title:'YouTubeの再生リスト'};
@@ -68,7 +70,7 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
   const channel=()=>{if(!/^UC[\w-]{22}$/.test(channelId||''))throw Object.assign(new Error('チャンネルIDが無効です。'),{status:400});return channelId;};
   const playlist=()=>{if(!/^[\w-]{2,150}$/.test(playlistId||''))throw Object.assign(new Error('再生リストIDが無効です。'),{status:400});return playlistId;};
   const ids=()=>{if(!Array.isArray(videoIds)||videoIds.length>100||videoIds.some(v=>!/^[\w-]{11}$/.test(v)))throw Object.assign(new Error('動画一覧が無効です。'),{status:400});return videoIds;};
-  const actions={recordHistory:async yt=>{const info=await yt.getBasicInfo(video());return info.addToWatchHistory();},like:yt=>yt.actions.execute('/like/like',{target:{videoId:video()},client:'TV'}),dislike:yt=>yt.actions.execute('/like/dislike',{target:{videoId:video()},client:'TV'}),removeRating:yt=>yt.actions.execute('/like/removelike',{target:{videoId:video()},client:'TV'}),subscribe:yt=>yt.actions.execute('/subscription/subscribe',{channelIds:[channel()],params:'EgIIAhgA',client:'TV'}),unsubscribe:yt=>yt.actions.execute('/subscription/unsubscribe',{channelIds:[channel()],params:'CgIIAhgA',client:'TV'}),comment:yt=>{if(typeof comment!=='string'||!comment.trim()||comment.length>10000)throw Object.assign(new Error('コメントが無効です。'),{status:400});return yt.interact.comment(video(),comment);},watchLater:yt=>yt.playlist.addVideos('WL',[video()]),playlistAdd:yt=>yt.playlist.addVideos(playlist(),ids()),playlistRemove:yt=>yt.playlist.removeVideos(playlist(),ids()),playlistCreate:yt=>{if(typeof title!=='string'||!title.trim()||title.length>150)throw Object.assign(new Error('再生リスト名が無効です。'),{status:400});return yt.playlist.create(title,ids());}};
+  const actions={recordHistory:async yt=>{const info=await yt.getBasicInfo(video());return info.addToWatchHistory();},like:yt=>yt.actions.execute('/like/like',{target:{videoId:video()},client:'TV'}),dislike:yt=>yt.actions.execute('/like/dislike',{target:{videoId:video()},client:'TV'}),removeRating:yt=>yt.actions.execute('/like/removelike',{target:{videoId:video()},client:'TV'}),subscribe:yt=>yt.actions.execute('/subscription/subscribe',{channelIds:[channel()],params:'EgIIAhgA',client:'TV'}),unsubscribe:yt=>yt.actions.execute('/subscription/unsubscribe',{channelIds:[channel()],params:'CgIIAhgA',client:'TV'}),comment:yt=>{if(typeof comment!=='string'||!comment.trim()||comment.length>10000)throw Object.assign(new Error('コメントが無効です。'),{status:400});return yt.interact.comment(video(),comment.trim());},watchLater:yt=>yt.playlist.addVideos('WL',[video()]),playlistAdd:yt=>yt.playlist.addVideos(playlist(),ids()),playlistRemove:yt=>yt.playlist.removeVideos(playlist(),ids()),playlistCreate:yt=>{if(typeof title!=='string'||!title.trim()||title.length>150)throw Object.assign(new Error('再生リスト名が無効です。'),{status:400});return yt.playlist.create(title,ids());}};
   if(!Object.hasOwn(actions,action))throw Object.assign(new Error('未対応の操作です。'),{status:400});
   return run(id,async yt=>{const result=await actions[action](yt);if(result?.success===false||result?.ok===false||result?.data?.error)throw new Error('YouTube operation rejected');return {success:true,playlistId:result?.playlist_id};});
  });

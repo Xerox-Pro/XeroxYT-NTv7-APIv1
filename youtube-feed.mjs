@@ -21,9 +21,13 @@ export function decodeYouTubeFeed(data) {
   const id=node.contentId||node.videoId||node.playlistId||node.channelId||tap.watchEndpoint?.videoId||tap.reelWatchEndpoint?.videoId||tap.browseEndpoint?.browseId||(typeof node.entityId==='string'?node.entityId.replace(/^shorts-shelf-item-/,''):'');
   const contentType=node.contentType||'';
   if(channelId(id)||/CHANNEL/.test(contentType)||kind==='channelRenderer') {if(channelId(id))channels.set(id,{id,title,avatar:thumbnails[0]?.url||'',subCountText:texts.join(' · ')});return;}
-  if(/PLAYLIST|ALBUM|PODCAST|SHOW|COURSE/.test(contentType)||/playlist/i.test(kind)) {
-   const playlistId=String(node.playlistId||id||'').replace(/^VL/,'');if(!/^[\w-]{2,150}$/.test(playlistId)||videoId(playlistId))return;
-   playlists.set(playlistId,{id:playlistId,title,videoCount:count(node.videoCount||node.videoCountText||texts.find(t=>/videos|本の動画/.test(t))),thumbnails:thumbnails[0]?.url||'',thumbnail:thumbnails[0]?.url||''});return;
+  const playlistId=String(node.playlistId||tap.watchEndpoint?.playlistId||tap.watchPlaylistEndpoint?.playlistId||((/PLAYLIST|ALBUM|PODCAST|SHOW|COURSE|STATION/.test(contentType)||['playlistRenderer','gridPlaylistRenderer','compactPlaylistRenderer','radioRenderer','compactRadioRenderer','mixRenderer'].includes(kind))?id:'')||'').replace(/^VL/,'');
+  const playlistCard=!!playlistId&&(/PLAYLIST|ALBUM|PODCAST|SHOW|COURSE|STATION/.test(contentType)||['playlistRenderer','gridPlaylistRenderer','compactPlaylistRenderer','radioRenderer','compactRadioRenderer','mixRenderer'].includes(kind)||kind==='tileRenderer');
+  if(playlistCard){
+   if(!/^[\w-]{2,150}$/.test(playlistId))return;
+   const first=tap.watchEndpoint?.videoId||node.firstVideoId||node.videos?.[0]?.childVideoRenderer?.videoId||(/^RD(?:AMVM)?([\w-]{11})$/.exec(playlistId)?.[1]);
+   const cover=thumbnails[0]?.url||(videoId(first)?`https://i.ytimg.com/vi/${first}/hqdefault.jpg`:'');
+   playlists.set(playlistId,{id:playlistId,playlistId,videoId:videoId(first)?first:undefined,type:playlistId.startsWith('RD')?'mix':'playlist',title,author:feedText(byline)||texts.join(' · ')||'YouTube',videoCount:count(node.videoCount||node.videoCountText||texts.find(t=>/videos|本の動画/.test(t))),thumbnails:cover,thumbnail:cover,videoThumbnails:cover?[{url:cover}]:[],viewCount:0,publishedText:'',lengthSeconds:0});return;
   }
   if(!videoId(id))return;
   const short=inShortsShelf||/SHORT/.test(node.style||'')||/SHORT/.test(contentType)||/shorts|reelItem/i.test(kind)||!!tap.reelWatchEndpoint;
@@ -38,7 +42,7 @@ export function decodeYouTubeFeed(data) {
   if(!value||typeof value!=='object'||depth>40||nodes++>30000||seen.has(value))return;seen.add(value);
   if(Array.isArray(value)){for(const item of value)walk(item,depth+1,inShortsShelf);return;}
   for(const [key,node] of Object.entries(value)) {
-   if(['lockupViewModel','videoRenderer','gridVideoRenderer','compactVideoRenderer','playlistVideoRenderer','playlistPanelVideoRenderer','tileRenderer','reelItemRenderer','shortsLockupViewModel','playlistRenderer','gridPlaylistRenderer','channelRenderer','gridChannelRenderer'].includes(key)){render(node,key,inShortsShelf);continue;}
+   if(['lockupViewModel','videoRenderer','gridVideoRenderer','compactVideoRenderer','playlistVideoRenderer','playlistPanelVideoRenderer','tileRenderer','reelItemRenderer','shortsLockupViewModel','playlistRenderer','gridPlaylistRenderer','compactPlaylistRenderer','radioRenderer','compactRadioRenderer','mixRenderer','channelRenderer','gridChannelRenderer'].includes(key)){render(node,key,inShortsShelf);continue;}
    if(['nextContinuationData','reloadContinuationData','timedContinuationData','continuationCommand'].includes(key)){const token=node?.continuation||node?.token;if(typeof token==='string'&&token.length<=16000&&!tokens.includes(token))tokens.push(token);continue;}
    // Menu commands and player responses are not additional feed entries.
    if(/menu|tracking|responseContext|playerResponse|frameworkUpdates|adSlot|adPlacement/i.test(key))continue;

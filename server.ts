@@ -1,3 +1,4 @@
+import {playlistCard,readYouTubeMix} from "./youtube-mix.mjs";
 import {fetchPublicWatchNext} from "./watch-next.mjs";
 import { registerYouTubeAccount } from "./youtube-account.mjs";
 import { registerFilteredSearch } from "./filtered-search.mjs";
@@ -920,6 +921,7 @@ async function startServer() {
 
   function isUnwantedVideo(v: any) {
     if (!v) return true;
+    if(playlistCard(v))return false;
     const videoId = v.id || v.videoId || v.content_id || "";
     if (videoId === "dQw4w9WgXcQ" || videoId.includes("dQw4w9WgXcQ"))
       return true;
@@ -1109,6 +1111,7 @@ async function startServer() {
     channelId?: string,
   ) {
     if (!v) return null;
+    const list=playlistCard(v);if(list)return list;
     if (isUnwantedVideo(v)) return null;
 
     if (v.type === "ShortsLockupView" || v.type === "ReelItem" || v.content_type === "SHORT") {
@@ -2323,62 +2326,7 @@ async function startServer() {
       const primary = info.primary_info;
       const secondary = info.secondary_info;
 
-      const recs = (info.watch_next_feed || [])
-        .slice(0, 15)
-        .map((item: any) => {
-          // formatVideoObjectを使って統一的にフォーマット
-          const formatted = formatVideoObject(item);
-          if (formatted) return formatted;
-
-          // formatVideoObjectで処理できない特殊なケースのみ手動で処理
-          if (item.type === "CompactVideo") {
-            return {
-              videoId: item.id,
-              title: item.title?.text,
-              author: item.author?.name || item.short_byline?.text,
-              authorId: item.author?.id,
-              authorAvatar: item.author?.thumbnails?.[0]?.url,
-              viewCount: extractViewCount(item),
-              lengthSeconds: item.duration?.seconds,
-              videoThumbnails: item.thumbnails,
-              type: "video",
-              publishedText: item.published?.text,
-            };
-          } else if (
-            item.type === "CompactPlaylist" ||
-            item.type === "Playlist" ||
-            item.type === "Mix"
-          ) {
-            return {
-              videoId:
-                item.first_video_id ||
-                (item.id && !item.id.startsWith("RD") ? item.id : undefined),
-              playlistId: item.id,
-              title: item.title?.text || item.title,
-              author:
-                item.author?.name || item.short_byline?.text || "YouTube Mix",
-              videoThumbnails: item.thumbnails || [],
-              viewCount: 0,
-              lengthSeconds: 0,
-              type: item.type === "Mix" ? "mix" : "playlist",
-              publishedText:
-                item.video_count_short?.text || item.video_count?.text || "",
-            };
-          } else if (item.type === "LockupView") {
-            return {
-              videoId: item.content_id,
-              title: item.metadata?.title?.text,
-              author: item.metadata?.metadata?.text || "Unknown",
-              videoThumbnails: item.content_image?.image || [],
-              viewCount: extractViewCount(item),
-              lengthSeconds: 0,
-              type: "video",
-            };
-          }
-          return null;
-        })
-        .filter(Boolean);
-
+      const recs = (info.watch_next_feed || []).slice(0,30).map((item:any)=>formatVideoObject(item)).filter(Boolean);
       let watchNextFallback:any=null;
       if(!recs.length){try{watchNextFallback=await fetchPublicWatchNext(youtube,videoId);recs.push(...extractVideosFromFeed(watchNextFallback,videoId));}catch{console.warn('[Related] Independent watch-next request failed');}}
       const owner = secondary?.owner;
@@ -2499,7 +2447,7 @@ async function startServer() {
     if (!Array.isArray(rawList)) return [];
     return rawList
       .map((item: any) => formatVideoObject(item))
-      .filter((v: any) => v && v.videoId && v.videoId !== currentVideoId && !isUnwantedVideo(v));
+      .filter((v: any) => v && (v.videoId||v.playlistId) && (v.playlistId||v.videoId!==currentVideoId) && !isUnwantedVideo(v));
   }
 
   // コメントフォーマットヘルパー関数
@@ -2841,6 +2789,7 @@ async function startServer() {
     }
   });
 
+  app.get('/api/mix/:id',async(req,res)=>{try{const result=await readYouTubeMix(await getYt(),req.params.id,String(req.query.videoId||''));res.setHeader('Cache-Control','private, no-store');res.json(result);}catch(error:any){res.status(error.status||502).json({error:error.message||'ミックスリストを取得できませんでした。'});}});
   // YouTube プレイリスト取得 API
   app.get("/api/playlist/:id", async (req, res) => {
     const playlistId = req.params.id;
