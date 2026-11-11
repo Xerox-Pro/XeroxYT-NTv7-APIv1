@@ -12,7 +12,9 @@ test('the encrypted store bridge is server-only, persistent and isolates keys',a
  await assert.rejects(store.set('youtube:alice',{flow:{access_token:'plaintext'},expires:Date.now()+60000}),/保存先/);
  await assert.rejects(store.get('users:alice'),/保存先/);
 });
-test('the lightweight Worker streams API requests to Node without replaying mutations',async()=>{
+test('public API requests still stream to Node without replaying requests',async()=>{
  const old=globalThis.fetch;let calls=0;globalThis.fetch=async request=>{calls++;assert.equal(new URL(request.url).hostname,'xeroxyt-ntv6-apiv1.vercel.app');assert.equal(request.method,'POST');assert.equal(await request.text(),'{"action":"like"}');return Response.json({success:true});};
- try{const response=await worker.fetch(new Request('https://worker.test/api/user/action',{method:'POST',headers:{Origin:'https://site.test',Authorization:'Bearer server-test-secret'},body:'{"action":"like"}'}),{ALLOWED_ORIGINS:'https://site.test',API_SHARED_SECRET:'server-test-secret'});assert.equal(response.status,200);assert.equal(response.headers.get('x-xeroxyt-proxy'),'cloudflare');assert.equal(calls,1);}finally{globalThis.fetch=old;}
+ try{const response=await worker.fetch(new Request('https://worker.test/api/channels/batch',{method:'POST',headers:{Origin:'https://site.test',Authorization:'Bearer server-test-secret'},body:'{"action":"like"}'}),{ALLOWED_ORIGINS:'https://site.test',API_SHARED_SECRET:'server-test-secret'});assert.equal(response.status,200);assert.equal(response.headers.get('x-xeroxyt-proxy'),'cloudflare');assert.equal(calls,1);}finally{globalThis.fetch=old;}
 });
+
+test('Google endpoints never forward to Node, including mutations and failed auth',async()=>{const old=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error('must not forward');};try{for(const path of ['/api/auth/status','/api/auth/signin','/api/user/feed/home','/api/user/action']){const r=await worker.fetch(new Request('https://worker.test'+path,{method:path.endsWith('signin')||path.endsWith('action')?'POST':'GET',headers:{Origin:'https://site.test',Authorization:'Bearer server-test-secret'}}),{ALLOWED_ORIGINS:'https://site.test',API_SHARED_SECRET:'server-test-secret'});assert.equal(r.status,401);}assert.equal(calls,0);}finally{globalThis.fetch=old;}});
