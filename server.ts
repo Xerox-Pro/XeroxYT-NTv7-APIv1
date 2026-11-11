@@ -1912,7 +1912,7 @@ async function startServer() {
           [finalVideos[i], finalVideos[j]] = [finalVideos[j], finalVideos[i]];
         }
 
-        res.setHeader("Cache-Control", "public, s-maxage=1800, stale-while-revalidate=86400");
+        res.setHeader("Cache-Control", "private, no-store");
         return res.json({
           videos: finalVideos,
           aiKeywords: geminiKeywords,
@@ -1928,7 +1928,7 @@ async function startServer() {
         .map((v: any) => formatVideoObject(v))
         .filter((v: any) => v && v.videoId);
 
-      res.setHeader("Cache-Control", "public, s-maxage=1800, stale-while-revalidate=86400");
+      res.setHeader("Cache-Control", "private, no-store");
       return res.json({
         videos: fallbackVideos,
         aiKeywords: [],

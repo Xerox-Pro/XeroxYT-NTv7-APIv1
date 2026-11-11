@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {readShortsSequence,shortsSequenceParams}from'../youtube-shorts-sequence.mjs';
+const entry=id=>({command:{reelWatchEndpoint:{videoId:id}}});
+test('Shorts uses the TV sequence and provider continuation in exact order, without reading home when seeded',async()=>{
+ let calls=0;const yt={actions:{execute:async(path,args)=>{assert.equal(path,'/reel/reel_watch_sequence');assert.equal(args.client,'TV');assert.equal(args.sequenceParams,calls++?'next-token':shortsSequenceParams('abcdefghijk'));return {data:{entries:[entry('lmnopqrstuv'),entry('abcdefghijk'),entry('lmnopqrstuv')],continuation:calls===1?'next-token':''}};}}};const first=await readShortsSequence(yt,'abcdefghijk');assert.deepEqual(first.videos.map(v=>v.videoId),['lmnopqrstuv','abcdefghijk']);const next=await readShortsSequence(yt,'',first.continuation);assert.equal(next.hasMore,false);assert.equal(calls,2);await assert.rejects(readShortsSequence(yt,'','invalid'),/無効/);
+});

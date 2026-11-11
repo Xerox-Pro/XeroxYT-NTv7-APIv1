@@ -1,3 +1,4 @@
+import {readShortsSequence} from './youtube-shorts-sequence.mjs';
 import {readYouTubeMix} from './youtube-mix.mjs';
 import {readYouTubeProfile} from './youtube-profile.mjs';
 import {readYouTubeFeed} from './youtube-feed.mjs';
@@ -57,6 +58,7 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
   const kind=req.params.kind,result=await readYouTubeFeed(yt,kind,String(req.query.continuation||''));
   return {...result,videos:kind==='shorts'?result.videos.filter(v=>v.isShort):kind==='home'?[...result.videos,...result.playlists]:result.videos,...(kind==='shorts'?{sourceDescription:'GoogleアカウントのホームにあるShorts'}:{})};
  }));
+ route('get','/api/user/shorts-sequence',async(req,res,id)=>run(id,yt=>readShortsSequence(yt,String(req.query.videoId||''),String(req.query.continuation||''))));
  route('get','/api/user/mix/:id',async(req,res,id)=>run(id,yt=>readYouTubeMix(yt,req.params.id,String(req.query.videoId||''),String(req.query.continuation||''))));
  route('get','/api/user/playlist/:id',async(req,res,id)=>run(id,async yt=>{
   if(!/^[\w-]{2,150}$/.test(req.params.id))throw Object.assign(new Error('再生リストIDが無効です。'),{status:400});

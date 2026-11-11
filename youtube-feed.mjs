@@ -22,7 +22,7 @@ export function decodeYouTubeFeed(data) {
   const contentType=node.contentType||'';
   if(channelId(id)||/CHANNEL/.test(contentType)||kind==='channelRenderer') {if(channelId(id))channels.set(id,{id,title,avatar:thumbnails[0]?.url||'',subCountText:texts.join(' · ')});return;}
   const playlistId=String(node.playlistId||tap.watchEndpoint?.playlistId||tap.watchPlaylistEndpoint?.playlistId||((/PLAYLIST|ALBUM|PODCAST|SHOW|COURSE|STATION/.test(contentType)||['playlistRenderer','gridPlaylistRenderer','compactPlaylistRenderer','radioRenderer','compactRadioRenderer','mixRenderer'].includes(kind))?id:'')||'').replace(/^VL/,'');
-  const playlistCard=!!playlistId&&(/PLAYLIST|ALBUM|PODCAST|SHOW|COURSE|STATION/.test(contentType)||['playlistRenderer','gridPlaylistRenderer','compactPlaylistRenderer','radioRenderer','compactRadioRenderer','mixRenderer'].includes(kind)||kind==='tileRenderer');
+  const playlistCard=!!playlistId&&(/PLAYLIST|ALBUM|PODCAST|SHOW|COURSE|STATION/.test(contentType)||['playlistRenderer','gridPlaylistRenderer','compactPlaylistRenderer','radioRenderer','compactRadioRenderer','mixRenderer'].includes(kind)||(kind==='tileRenderer'&&!/VIDEO/.test(contentType)));
   if(playlistCard){
    if(!/^[\w-]{2,150}$/.test(playlistId))return;
    const first=tap.watchEndpoint?.videoId||node.firstVideoId||node.videos?.[0]?.childVideoRenderer?.videoId||(/^RD(?:AMVM)?([\w-]{11})$/.exec(playlistId)?.[1]);

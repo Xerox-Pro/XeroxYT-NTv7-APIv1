@@ -19,3 +19,8 @@ test('infinite mixes continue with the provider playlist index and parameters',a
  const execute=async(path,args)=>{if(args.playlistIndex!==undefined){assert.equal(args.playlistIndex,24);assert.equal(args.videoId,'abcdefghijk');assert.equal(args.params,'OAE%3D');}return {data:{playlist:{title:'Mix',isInfinite:true,contents:[{playlistPanelVideoRenderer:{videoId:args.playlistIndex?'bcdefghijkl':'abcdefghijk',title:{simpleText:'曲'},navigationEndpoint:{watchEndpoint:{videoId:'abcdefghijk',index:24,params:'OAE%3D'}}}}]}}};};
  const yt={actions:{execute}};const first=await readYouTubeMix(yt,'RDabcdefghijk','abcdefghijk');assert.equal(first.hasMore,true);const next=await readYouTubeMix(yt,first.id,'',first.continuation);assert.equal(next.videos[0].videoId,'bcdefghijkl');await assert.rejects(readYouTubeMix(yt,first.id,'','bad-cursor'),/無効/);
 });
+test('TV pivot playlist tiles are read as videos and unrelated shelves are excluded',async()=>{
+ const tile=(id,playlistId,index)=>({tileRenderer:{contentId:id,contentType:'TILE_CONTENT_TYPE_VIDEO',metadata:{tileMetadataRenderer:{title:{simpleText:'曲'}}},onSelectCommand:{watchEndpoint:{videoId:id,playlistId,index,params:'OAE%3D'}}}});
+ const data={contents:{singleColumnWatchNextResults:{playlist:{playlist:{playlistId:'RDabcdefghijk',title:'Mix',isInfinite:true}},pivot:{sectionListRenderer:{contents:[tile('abcdefghijk','RDabcdefghijk',0),tile('bcdefghijkl','RDabcdefghijk',1),tile('lmnopqrstuv','RDunrelated',2)]}}}}};
+ const mix=await readYouTubeMix({session:{logged_in:true},actions:{execute:async()=>({data})}},'RDabcdefghijk','abcdefghijk');assert.deepEqual(mix.videos.map(v=>v.videoId),['abcdefghijk','bcdefghijkl']);assert.equal(mix.hasMore,true);
+});
