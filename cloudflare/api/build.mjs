@@ -24,3 +24,5 @@ await fs.writeFile('cloudflare/api/generated.ts', generated);
 await build({ entryPoints: ['cloudflare/api/worker.mjs'], bundle:true, minify:true, keepNames:true, format:'esm', platform:'node', conditions:['workerd','worker'], external:['cloudflare:*','node:*','path','crypto','stream','util','events','http','https','url','zlib','buffer','assert','tty','os','fs','net','querystring','string_decoder'], outfile:'cloudflare/api/bundle.mjs', define:{'process.env.NODE_ENV':'"production"'}, banner:{js: 'import { createRequire } from "node:module"; const require = createRequire("/worker.mjs"); const __dirname = "/"; const __filename = "/worker.mjs";'}, logLevel:'info' });
 
 await build({entryPoints:['node-entry.ts'],bundle:true,format:'esm',platform:'node',packages:'external',outfile:'dist/node.mjs',logLevel:'info'});
+
+await build({entryPoints:['node-app.ts'],bundle:true,format:'esm',platform:'node',packages:'external',outfile:'dist/node-app.mjs',logLevel:'info'});
