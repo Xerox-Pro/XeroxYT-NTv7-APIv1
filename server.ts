@@ -37,7 +37,6 @@ console.error = (...args) => {
 
 let yt: Innertube | null = null;
 let ytInstancePromise: Promise<Innertube> | null = null;
-let lastCredentials: any = null;
 
 async function getYt() {
   if (yt) return yt;
@@ -58,15 +57,6 @@ async function getYt() {
           retrieve_player: false,
         });
         
-        instance.session.on("auth", ({ credentials }) => {
-          console.log("[YT] Auth event triggered. Got credentials!");
-          lastCredentials = credentials;
-        });
-        instance.session.on("update-credentials", ({ credentials }) => {
-          console.log("[YT] Update-credentials event triggered. Got credentials!");
-          lastCredentials = credentials;
-        });
-
         yt = instance;
         console.log("[YT] Innertube initialized successfully");
         return instance;
@@ -83,68 +73,6 @@ async function getYt() {
   })();
 
   return ytInstancePromise;
-}
-
-const ytInstancesCache = new Map<string, Innertube>();
-
-async function getInnertubeInstance(req: express.Request, requireAuth: boolean = false) {
-  const credentialsHeader = req.headers["x-youtube-credentials"] as string;
-  if (!credentialsHeader) {
-    if (requireAuth) {
-      throw new Error("You must be signed in to perform this operation.");
-    }
-    return getYt();
-  }
-
-  let credentialsObj: any = null;
-  try {
-    credentialsObj = JSON.parse(credentialsHeader);
-  } catch (e) {
-    if (requireAuth) {
-      throw new Error("You must be signed in to perform this operation.");
-    }
-    return getYt();
-  }
-
-  if (!credentialsObj) {
-    if (requireAuth) {
-      throw new Error("You must be signed in to perform this operation.");
-    }
-    return getYt();
-  }
-
-  if (!credentialsObj.refresh_token) {
-    credentialsObj.refresh_token = "dummy_refresh_token_for_validation";
-  }
-
-  const keySource = (credentialsObj.refresh_token !== "dummy_refresh_token_for_validation" && credentialsObj.refresh_token) || credentialsObj.access_token || credentialsHeader;
-  const cacheKey = crypto.createHash("sha256").update(keySource).digest("hex");
-
-  if (ytInstancesCache.has(cacheKey)) {
-    return ytInstancesCache.get(cacheKey)!;
-  }
-
-  console.log(`[YT] Creating new authenticated Innertube instance...`);
-  const instance = await Innertube.create({
-    cache: new UniversalCache(false),
-    location: "JP",
-    lang: "ja",
-    retrieve_player: false,
-  });
-
-  try {
-    await instance.session.signIn(credentialsObj);
-    console.log(`[YT] Authenticated successfully with credentials`);
-  } catch (err) {
-    console.error(`[YT] Failed to sign in with provided credentials:`, err);
-    if (requireAuth) {
-      throw new Error("You must be signed in to perform this operation.");
-    }
-    return getYt();
-  }
-
-  ytInstancesCache.set(cacheKey, instance);
-  return instance;
 }
 
 const INVIDIOUS_INSTANCES = [
@@ -443,7 +371,7 @@ async function startServer() {
     if (!/^\/(api|stream|360|edu|scratch-edu)(?:\/|$)/.test(req.path)) return next();
     try {
       const session = await fetch(new URL('/api/account/session', process.env.ACCOUNT_API_URL).href, {
-        headers: { cookie: req.headers.cookie || '' }, signal: AbortSignal.timeout(15000)
+        headers: { cookie: req.headers.cookie || '' }, signal: AbortSignal.timeout(5000)
       });
       if (session.status === 401) return res.status(401).json({ error: 'ログインが必要です。' });
       if (!session.ok) return res.status(503).json({ error: '認証サービスに接続できません。' });
@@ -953,7 +881,7 @@ async function startServer() {
   const authFlows = new Map<string, { flow: any; expires: number }>();
 
   registerYouTubeAccount(app, {
-    store: authFlows, secret: process.env.API_SHARED_SECRET,
+    store: authFlows, secret: process.env.API_SHARED_SECRET, createPublicClient: getYt,
     createClient: () => { Log.setLevel(Log.Level.NONE); return Innertube.create({ client_type: ClientType.TV, location: "JP", lang: "ja", retrieve_player: false, cache: new UniversalCache(false) }); },
     formatVideo: formatVideoObject, formatChannel: formatSearchChannel,
     Search: YT.Search, Feed: Mixins.Feed, ContinuationItem: YTNodes.ContinuationItem,
@@ -1591,7 +1519,7 @@ async function startServer() {
   // Use YouTube's Home feed chips rather than a keyword search.
   app.get("/api/home/categories", async (req, res) => {
     try {
-      const youtube = await getInnertubeInstance(req);
+      const youtube = await getYt();
       const feed = await youtube.getHomeFeed();
       const categories = (feed.filters || []).filter((name: string) =>
         name && name !== "すべて" && name.toLowerCase() !== "all"
@@ -1611,7 +1539,7 @@ async function startServer() {
       return res.status(400).json({ error: "カテゴリを確認してください。" });
     }
     try {
-      const youtube = await getInnertubeInstance(req);
+      const youtube = await getYt();
       let feed: any;
       try {
         const home = await youtube.getHomeFeed();
@@ -1648,25 +1576,6 @@ async function startServer() {
     const seed = Number.isFinite(clientSeed)
       ? clientSeed
       : Date.now() + Math.floor(Math.random() * 100000);
-
-    const credentialsHeader = req.headers["x-youtube-credentials"] as string;
-    if (credentialsHeader) {
-      try {
-        const youtube = await getInnertubeInstance(req);
-        console.log("[Recs] Logged in! Fetching recommendations from Home Feed...");
-        const home = await youtube.getHomeFeed();
-        const videos = extractVideosFromFeed(home);
-        if (videos && videos.length > 0) {
-          res.setHeader("Cache-Control", "private, no-cache, no-store, must-revalidate");
-          return res.json({
-            videos: videos,
-            aiKeywords: [],
-          });
-        }
-      } catch (err) {
-        console.error("[Recs] Failed to fetch home feed, falling back to algorithmic recs:", err);
-      }
-    }
 
     // ユーザーが見た動画のハッシュタグ頻度マップ（出没回数）
     const hashtagFrequencyMap: Record<string, number> = {};
@@ -2122,22 +2031,6 @@ async function startServer() {
     const selectedChannel = (req.query.selectedChannel as string) || "all";
     const page = parseInt((req.query.page as string) || "1", 10);
     
-    const credentialsHeader = req.headers["x-youtube-credentials"] as string;
-    if (credentialsHeader && selectedChannel === "all") {
-      try {
-        const youtube = await getInnertubeInstance(req);
-        console.log("[Subs] Logged in! Fetching subscriptions feed from Innertube...");
-        const subsFeed = await youtube.getSubscriptionsFeed();
-        const videos = extractVideosFromFeed(subsFeed);
-        if (videos && videos.length > 0) {
-          res.setHeader("Cache-Control", "private, no-cache, no-store, must-revalidate");
-          return res.json(videos);
-        }
-      } catch (err) {
-        console.error("[Subs] Failed to fetch subscriptions feed from Innertube:", err);
-      }
-    }
-
     const cacheKey = `subfeed:${selectedChannel}:${page}:${channelTitles.sort().join(",")}`;
     const cached = getFromMemoryCache<any[]>(cacheKey);
     if (cached) {
@@ -2593,12 +2486,7 @@ async function startServer() {
       return res.json(videoData);
     } catch (err) {
       console.error("Video API error:", err);
-      // A temporary upstream error must allow the gateway to try the next API.
-      const message = String((err as any)?.message || err);
-      const unavailable = /\b(video unavailable|video not found|does not exist|private video|removed video)\b/i.test(message);
-      res.status(unavailable ? 404 : 502).json({
-        error: unavailable ? "Video not found" : "動画情報の取得に一時的に失敗しました。",
-      });
+      res.status(404).json({ error: "Video not found" });
     }
   });
 
@@ -3016,7 +2904,7 @@ async function startServer() {
     }
 
     try {
-      const youtube = await getInnertubeInstance(req);
+      const youtube = await getYt();
       const playlist = await youtube.getPlaylist(playlistId);
 
       const title =

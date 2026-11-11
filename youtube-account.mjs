@@ -1,3 +1,4 @@
+import {readYouTubeProfile} from './youtube-profile.mjs';
 import {readYouTubeFeed} from './youtube-feed.mjs';
 import {createHash,randomBytes,randomUUID,createCipheriv,createDecipheriv} from 'node:crypto';
 import {collectShorts} from './shorts.mjs';
@@ -8,8 +9,7 @@ export function credentialVault(secret){
  return {seal(value,user){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);cipher.setAAD(Buffer.from(user));const data=Buffer.concat([cipher.update(Buffer.from(JSON.stringify(value),'utf8')),cipher.final()]);return {iv:iv.toString('base64'),data:data.toString('base64'),tag:cipher.getAuthTag().toString('base64')};},open(value,user){const cipher=createDecipheriv('aes-256-gcm',key,Buffer.from(value.iv,'base64'));cipher.setAAD(Buffer.from(user));cipher.setAuthTag(Buffer.from(value.tag,'base64'));return JSON.parse(Buffer.concat([cipher.update(Buffer.from(value.data,'base64')),cipher.final()]).toString());}};
 }
 const text=value=>typeof value==='string'?value:value?.text||value?.toString?.()||'';
-function profile(info){const list=info?.contents?.contents||[];const account=list.find(item=>item.is_selected)||list.find(item=>item.account_name);return {name:text(account?.account_name)||text(info?.contents?.header?.title)||'YouTube アカウント',picture:account?.account_photo?.[0]?.url||'',email:'',sub:account?.endpoint?.payload?.browseId||'',handle:text(account?.channel_handle)};}
-export function registerYouTubeAccount(app,{store,secret,createClient,formatVideo,formatChannel,Search,ContinuationItem,Feed,fetcher=fetch}){
+export function registerYouTubeAccount(app,{store,secret,createClient,createPublicClient,formatVideo,formatChannel,Search,ContinuationItem,Feed,fetcher=fetch}){
  let vault;const getVault=()=>vault||(vault=credentialVault(secret));
  const read=async id=>{const row=await store.get('youtube:'+id);return row&&row.expires>Date.now()?getVault().open(row.flow,id):null;};
  const save=async(id,value)=>store.set('youtube:'+id,{flow:getVault().seal(value,id),expires:Date.now()+lifetime});
@@ -18,7 +18,7 @@ export function registerYouTubeAccount(app,{store,secret,createClient,formatVide
   const yt=await createClient();let saved=JSON.stringify(session.credentials);
   const persist=async()=>{const credentials=yt.session.oauth.oauth2_tokens;if(!credentials||JSON.stringify(credentials)===saved)return;const current=await read(id);if(current?.credentials?.refresh_token!==session.credentials.refresh_token)throw Object.assign(new Error('YouTubeの連携状態が変わりました。開き直してください。'),{status:409});await save(id,{...session,credentials});saved=JSON.stringify(credentials);};
   try{await yt.session.signIn(session.credentials);}catch{throw Object.assign(new Error('YouTube連携の有効期限が切れました。再連携してください。'),{status:401,code:'YOUTUBE_REAUTH_REQUIRED'});}
-  await persist();try{return await work(yt,session);}finally{await persist();}
+  await persist();try{return await work(yt,{...session,siteId:id});}finally{await persist();}
  };
  const sendError=(res,error)=>{
   // Never log provider messages: they can contain account credentials or request bodies.
@@ -46,7 +46,7 @@ export function registerYouTubeAccount(app,{store,secret,createClient,formatVide
   if(!ok||data.error){if(['authorization_pending','slow_down'].includes(data.error)){if(data.error==='slow_down'){flow.interval+=5;flow.next=Date.now()+flow.interval*1000;await store.set(key,{...row,flow:getVault().seal(flow,id)});}return {status:'pending',interval:flow.interval};}await store.delete(key);return {status:'error',error:data.error==='access_denied'?'Googleでの認証がキャンセルされました。':'Google認証が失敗または期限切れになりました。'};}
   if(!data.access_token||!data.refresh_token)throw new Error('Incomplete Google credentials');
   const credentials={access_token:data.access_token,refresh_token:data.refresh_token,expiry_date:new Date(Date.now()+data.expires_in*1000).toISOString(),client:flow.client};
-  const yt=await createClient();await yt.session.signIn(credentials);let user={name:'YouTube アカウント',email:'',picture:''};try{user=profile(await yt.account.getInfo(false));}catch{}
+  const yt=await createClient();await yt.session.signIn(credentials);let user={name:'YouTube アカウント',email:'',picture:''};try{user=await readYouTubeProfile(yt,createPublicClient);}catch{}
   const active=await store.get(key);if(!active||getVault().open(active.flow,id).device_code!==flow.device_code)return {status:'error',error:'この連携操作はキャンセルされました。'};
   await save(id,{credentials:yt.session.oauth.oauth2_tokens||credentials,user});await store.delete(key);return {success:true,status:'connected',user};
  });
@@ -60,7 +60,7 @@ export function registerYouTubeAccount(app,{store,secret,createClient,formatVide
   if(!/^[\w-]{2,150}$/.test(req.params.id))throw Object.assign(new Error('再生リストIDが無効です。'),{status:400});
   const result=await readYouTubeFeed(yt,'playlist:'+req.params.id,String(req.query.continuation||''));return {...result,id:req.params.id,title:'YouTubeの再生リスト'};
  }));
- const reads={history:async yt=>(await readYouTubeFeed(yt,'history')).videos,'liked-videos':async yt=>(await readYouTubeFeed(yt,'liked')).videos,'watch-later':async yt=>(await readYouTubeFeed(yt,'watch-later')).videos,playlists:async yt=>(await readYouTubeFeed(yt,'playlists')).playlists,subscriptions:async yt=>(await readYouTubeFeed(yt,'channels')).channels,'channel-info':async(yt,session)=>session.user,'notifications/unread-count':async yt=>({count:await yt.getUnseenNotificationsCount()}),notifications:async yt=>(await yt.getNotifications()).contents.map(n=>({id:n.notification_id,message:text(n.short_message),sentTime:text(n.sent_time),read:!!n.read,avatar:n.thumbnails?.[0]?.url||'',thumbnail:n.video_thumbnails?.[0]?.url||'',videoId:n.endpoint?.payload?.videoId||''}))};
+ const reads={history:async yt=>(await readYouTubeFeed(yt,'history')).videos,'liked-videos':async yt=>(await readYouTubeFeed(yt,'liked')).videos,'watch-later':async yt=>(await readYouTubeFeed(yt,'watch-later')).videos,playlists:async yt=>(await readYouTubeFeed(yt,'playlists')).playlists,subscriptions:async yt=>(await readYouTubeFeed(yt,'channels')).channels,'channel-info':async(yt,session)=>{const user=await readYouTubeProfile(yt,createPublicClient);const current=await read(session.siteId);if(current?.credentials?.refresh_token!==session.credentials.refresh_token)throw Object.assign(new Error('連携状態が変わりました。'),{status:409});await save(session.siteId,{credentials:yt.session.oauth.oauth2_tokens||session.credentials,user});return user;},'notifications/unread-count':async yt=>({count:await yt.getUnseenNotificationsCount()}),notifications:async yt=>(await yt.getNotifications()).contents.map(n=>({id:n.notification_id,message:text(n.short_message),sentTime:text(n.sent_time),read:!!n.read,avatar:n.thumbnails?.[0]?.url||'',thumbnail:n.video_thumbnails?.[0]?.url||'',videoId:n.endpoint?.payload?.videoId||''}))};
  for(const [path,work]of Object.entries(reads))route('get','/api/user/'+path,async(req,res,id)=>run(id,work));
  route('post','/api/user/action',async(req,res,id)=>{
   const {action,videoId,channelId,text:comment,playlistId,title,videoIds}=req.body||{};

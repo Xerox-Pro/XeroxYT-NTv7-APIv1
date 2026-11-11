@@ -2,7 +2,7 @@
 // HomeFeed/Playlist wrappers, or unrelated nodes from the parser's global memo.
 const videoId = value => typeof value === 'string' && /^[\w-]{11}$/.test(value);
 const channelId = value => typeof value === 'string' && /^UC[\w-]{22}$/.test(value);
-export const feedText = value => typeof value === 'string' ? value : typeof value?.text === 'string' ? value.text : value?.content || value?.simpleText || value?.runs?.map(run => run.text || '').join('') || '';
+export const feedText = value => {if(typeof value==='string')return value;for(const key of ['text','content','simpleText'])if(typeof value?.[key]==='string')return value[key];return Array.isArray(value?.runs)?value.runs.map(run=>typeof run.text==='string'?run.text:'').join(''):'';};
 const images = value => Array.isArray(value) ? value : value?.sources || value?.thumbnails || [];
 function endpoint(node) { return node?.rendererContext?.commandContext?.onTap?.innertubeCommand || node?.onSelectCommand || node?.navigationEndpoint || node?.endpoint || {}; }
 function count(value) { const match=feedText(value).replace(/,/g,'').match(/([\d.]+)\s*([万億KMB])?/i); return match ? Math.round(Number(match[1])*({万:1e4,億:1e8,K:1e3,M:1e6,B:1e9}[match[2]?.toUpperCase()]||1)) : 0; }
@@ -52,10 +52,11 @@ export async function readYouTubeFeed(yt,kind,cursor='') {
  const browseId=browseIds[kind]||(kind.startsWith('playlist:')?'VL'+kind.slice(9).replace(/^VL/,''):null);
  if(!browseId)throw Object.assign(new Error('不明なフィードです。'),{status:400});
  const result={videos:[],playlists:[],channels:[]};const visited=new Set();let requests=0;const start=Date.now();
- const hasItems=()=>kind==='shorts'?result.videos.some(v=>v.isShort):kind==='playlists'?result.playlists.length:kind==='channels'?result.channels.length:result.videos.length;
+ const uniqueVideos=()=>new Set(result.videos.filter(v=>kind!=='shorts'||v.isShort).map(v=>v.videoId)).size;
+ const hasItems=()=>kind==='playlists'?result.playlists.length>=24:kind==='channels'?result.channels.length>=24:uniqueVideos()>=(kind==='shorts'?12:24);
  do {
   const token=queue.shift();if(token&&visited.has(token))continue;if(token)visited.add(token);
-  const response=await yt.actions.execute('/browse',{...(token?{continuation:token}:{browseId}),client:'TV'});requests++;
+  let response;try{response=await yt.actions.execute('/browse',{...(token?{continuation:token}:{browseId}),client:'TV'});}catch(error){if(!token||!(result.videos.length||result.playlists.length||result.channels.length))throw error;queue.unshift(token);break;}requests++;
   if(response.data?.error)throw Object.assign(new Error('YouTubeが一覧の取得を拒否しました。'),{status:502,code:'YOUTUBE_FEED_REJECTED'});
   const page=decodeYouTubeFeed(response.data);for(const key of ['videos','playlists','channels'])result[key].push(...page[key]);
   queue.push(...page.tokens.filter(t=>!visited.has(t)&&!queue.includes(t)));queue=queue.slice(0,30);

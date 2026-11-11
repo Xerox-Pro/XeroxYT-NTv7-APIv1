@@ -7,7 +7,8 @@ test('TV shelves read video, playlist and channel lockups without treating menu 
 });
 test('continuation-only TV shelves are hydrated and all remaining shelf tokens survive pagination',async()=>{
  const calls=[];const yt={actions:{execute:async(path,args)=>{calls.push(args);assert.equal(args.client,'TV');assert.equal(path,'/browse');if(args.browseId)return {data:{continuations:[{nextContinuationData:{continuation:'one'}},{nextContinuationData:{continuation:'two'}}]}};if(args.continuation==='one')return {data:{contents:[lockup('abcdefghijk')],continuations:[{nextContinuationData:{continuation:'three'}}]}};return {data:{contents:[lockup('bcdefghijkl')]}};}}};
- const first=await readYouTubeFeed(yt,'home');assert.equal(first.videos.length,1);assert.equal(calls.length,2);assert.deepEqual(JSON.parse(Buffer.from(first.continuation,'base64url').toString()).tokens,['two','three']);const second=await readYouTubeFeed(yt,'home',first.continuation);assert.equal(second.videos[0].videoId,'bcdefghijkl');await assert.rejects(readYouTubeFeed(yt,'history',first.continuation),/続きの情報/);await assert.rejects(readYouTubeFeed(yt,'home','invalid'),/続きの情報/);
+ const first=await readYouTubeFeed(yt,'home');assert.equal(first.videos.length,2);assert.equal(calls.length,4);assert.equal(first.hasMore,false);
+ const cursor=Buffer.from(JSON.stringify({kind:'home',tokens:['two']})).toString('base64url');const second=await readYouTubeFeed(yt,'home',cursor);assert.equal(second.videos[0].videoId,'bcdefghijkl');await assert.rejects(readYouTubeFeed(yt,'history',cursor),/続きの情報/);await assert.rejects(readYouTubeFeed(yt,'home','invalid'),/続きの情報/);
 });
 test('an empty shelf loop terminates and explicit YouTube errors are never disguised as empty success',async()=>{
  let calls=0;const yt={actions:{execute:async()=>{calls++;return {data:{continuations:[{nextContinuationData:{continuation:'same'}}]}};}}};assert.equal((await readYouTubeFeed(yt,'home')).videos.length,0);assert.equal(calls,2);await assert.rejects(readYouTubeFeed({actions:{execute:async()=>({data:{error:{code:403}}})}},'home'),/拒否/);
@@ -19,4 +20,12 @@ test('real YouTube.js sends the signed-in bearer token with TV client context to
  }});
  await yt.session.signIn({access_token:'test-private-access',refresh_token:'test-private-refresh',expiry_date:new Date(Date.now()+3600000).toISOString()});
  const result=await readYouTubeFeed(yt,'home');assert.equal(requests,1);assert.equal(result.videos.length,1);assert.ok(!JSON.stringify(result).includes('test-private-access'));
+});
+
+test('a small personalized home page is filled from additional pages up to 24 unique videos',async()=>{
+ let calls=0;const yt={actions:{execute:async()=>{const page=calls++;return {data:{contents:Array.from({length:8},(_,i)=>lockup(String(page*8+i).padStart(11,'a'))),continuations:[{nextContinuationData:{continuation:'page-'+calls}}]}};}}};
+ const result=await readYouTubeFeed(yt,'home');assert.equal(result.videos.length,24);assert.equal(calls,3);assert.equal(result.hasMore,true);
+});
+test('a failure on an additional page preserves loaded videos and a cursor for retry',async()=>{
+ let calls=0;const yt={actions:{execute:async()=>{if(calls++)throw new Error('offline');return {data:{contents:[lockup('abcdefghijk')],continuations:[{nextContinuationData:{continuation:'retry'}}]}};}}};const result=await readYouTubeFeed(yt,'home');assert.equal(result.videos.length,1);assert.equal(result.hasMore,true);assert.deepEqual(JSON.parse(Buffer.from(result.continuation,'base64url')).tokens,['retry']);
 });
