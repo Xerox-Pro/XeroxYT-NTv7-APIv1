@@ -4,6 +4,13 @@ import {readYouTubeProfile} from './youtube-profile.mjs';
 import {readYouTubeFeed} from './youtube-feed.mjs';
 import {createHash,randomBytes,randomUUID,createCipheriv,createDecipheriv} from 'node:crypto';
 import {collectShorts} from './shorts.mjs';
+const publicMessages=new Set(["Googleアカウントを連携してください。", "Google認証コードを取得できませんでした。", "YouTubeからショートの開始動画を取得できませんでした。再試行してください。", "YouTubeから次のショートを取得できませんでした。再試行してください。", "YouTubeが一覧の取得を拒否しました。", "YouTubeのショート取得に失敗しました。再試行してください。", "YouTubeの認証確認に一時的に失敗しました。連携は保持しています。再試行してください。", "YouTubeの連携状態が変わりました。開き直してください。", "YouTube連携が無効になりました。再連携してください。", "YouTube連携のサーバー設定が不足しています。", "このミックスリストを読み込めませんでした。時間をおいて再試行してください。", "コメントが無効です。", "ショートの続きの情報が無効です。開き直してください。", "ショート動画IDが無効です。", "チャンネルIDが無効です。", "ミックスリストIDが無効です。", "ミックスリストに再生できる動画がありません。", "ミックスリストの続きの情報が無効です。", "ログインが必要です。", "不明なフィードです。", "再生リストIDが無効です。", "再生リスト名が無効です。", "動画IDが無効です。", "動画一覧が無効です。", "未対応の操作です。", "続きの情報が無効です。", "続きの情報が無効です。ページを開き直してください。", "認証コードが期限切れです。もう一度連携してください。", "連携状態が変わりました。"]);
+export function youtubePublicError(error){
+ const known=publicMessages.has(error?.message);
+ const status=Number.isInteger(error?.status)&&error.status>=400&&error.status<=599?error.status:502;
+ const code=known&&['YOUTUBE_NOT_LINKED','YOUTUBE_REAUTH_REQUIRED','YOUTUBE_AUTH_TEMPORARY','YOUTUBE_FEED_REJECTED','YOUTUBE_SHORTS_SEED_UNAVAILABLE','YOUTUBE_SHORTS_SEQUENCE_REJECTED','YOUTUBE_SHORTS_SEQUENCE_EMPTY'].includes(error?.code)?error.code:'YOUTUBE_REQUEST_FAILED';
+ return {status,error:known?error.message:'YouTubeとの通信に失敗しました。時間をおいて再試行してください。',code};
+}
 const lifetime=90*86400000;
 export function credentialVault(secret){
  if(!secret||secret.length<16)throw new Error('YouTube連携のサーバー設定が不足しています。');
@@ -23,11 +30,11 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
   await persist();try{return await work(yt,{...session,siteId:id});}finally{await persist();}
  };
  const sendError=(res,error)=>{
-  // Never log provider messages: they can contain account credentials or request bodies.
-  console.warn(JSON.stringify({event:'youtube_account_error',name:error.name||'Error',code:error.code||'YOUTUBE_REQUEST_FAILED',status:error.status||502}));
-  return res.status(error.status||502).json({error:error.status?error.message:'YouTubeとの通信に失敗しました。時間をおいて再試行してください。',code:error.status?error.code||'YOUTUBE_REQUEST_FAILED':'YOUTUBE_REQUEST_FAILED'});
+  const safe=youtubePublicError(error);
+  console.warn(JSON.stringify({event:'youtube_account_error',code:safe.code,status:safe.status}));
+  return res.status(safe.status).json({error:safe.error,code:safe.code});
  };
- const route=(method,path,work)=>app[method](path,async(req,res)=>{res.setHeader('Cache-Control','private, no-store');try{const result=await work(req,res,res.locals.siteAccountId);if(!res.headersSent)res.json(result);}catch(error){sendError(res,error);}});
+ const route=(method,path,work)=>app[method](path,async(req,res)=>{res.setHeader('Cache-Control','private, no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');try{if(typeof res.locals.siteAccountId!=='string'||!res.locals.siteAccountId)throw Object.assign(new Error('ログインが必要です。'),{status:401});const result=await work(req,res,res.locals.siteAccountId);if(!res.headersSent)res.json(result);}catch(error){sendError(res,error);}});
  const google=async(path,body)=>{const response=await fetcher('https://oauth2.googleapis.com/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(10000)});const data=await response.json();return {ok:response.ok,data};};
  route('get','/api/auth/status',async(req,res,id)=>{const link=await read(id);return {connected:!!link,user:link?.user||null,client:'TV',limitations:'Google OAuthはTVクライアントに対応しています。YouTube側の対応状況によって利用できない機能があります。'};});
  route('post','/api/auth/signin',async(req,res,id)=>{
