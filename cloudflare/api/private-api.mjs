@@ -1,3 +1,4 @@
+import {privateRateLimit} from './private-rate-limit.mjs';
 import {createHmac,timingSafeEqual,createHash} from 'node:crypto';
 import {Innertube,ClientType,Log} from 'youtubei.js/cf-worker';
 import {registerYouTubeAccount} from '../../youtube-account.mjs';
@@ -15,6 +16,7 @@ export async function privateIdentity(request,env){
 }
 export async function issuePrivateTicket(request,env){
  const identity=await privateIdentity(request,env);if(!identity)return Response.json({error:'ログインが必要です。'},{status:401,headers:{'Cache-Control':'no-store'}});
+ const limited=await privateRateLimit(env.DB,identity.id,'/api/account/cloudflare-session','GET');if(limited)return limited;
  const expiresAt=Date.now()+300000,body=Buffer.from(JSON.stringify({session:identity.hash,origin:request.headers.get('origin'),exp:expiresAt})).toString('base64url');
  return Response.json({token:body+'.'+signature(body,env.API_SHARED_SECRET),expiresAt,origin:new URL(request.url).origin},{headers:{'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer'}});
 }
@@ -22,6 +24,7 @@ export function createPrivateRouter(register=registerYouTubeAccount){
  return async function(request,env){
  const identity=await privateIdentity(request,env);if(!identity)return Response.json({error:'ログインが必要です。',code:'SITE_SESSION_REQUIRED'},{status:401,headers:{'Cache-Control':'private, no-store'}});
  const url=new URL(request.url),routes=[];
+ const limited=await privateRateLimit(env.DB,identity.id,url.pathname,request.method);if(limited)return limited;
  const app=Object.fromEntries(['get','post'].map(method=>[method,(path,handler)=>routes.push({method:method.toUpperCase(),parts:path.split('/'),handler})]));
  const store={async get(key){const row=await env.DB.prepare('SELECT data FROM api_oauth_flows WHERE user_id=? AND expires_at>?').bind(key,Date.now()).first();return row?JSON.parse(row.data):undefined;},async set(key,value){await env.DB.prepare('INSERT INTO api_oauth_flows(user_id,data,expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,expires_at=excluded.expires_at').bind(key,JSON.stringify(value),value.expires).run();},async delete(key){await env.DB.prepare('DELETE FROM api_oauth_flows WHERE user_id=?').bind(key).run();}};
  const createClient=()=>{Log.setLevel(Log.Level.NONE);return Innertube.create({client_type:ClientType.TV,location:'JP',lang:'ja',retrieve_player:false,cache:{get:async()=>undefined,set:async()=>{},remove:async()=>{}}});};
