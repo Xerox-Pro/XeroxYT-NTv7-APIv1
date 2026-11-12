@@ -17,6 +17,7 @@ async function readProfile(service,token,fetcher){return service==='instagram'?p
 export function createSocialApi(fetcher=fetch){return async(request,env)=>{
  const url=new URL(request.url),parts=url.pathname.split('/'),service=parts[2],route=parts.slice(3).join('/');if(!services.includes(service))return json({error:'Not found'},404);
  const config=configuration(env,service),db=store(env),origin=request.headers.get('origin'),allowed=(env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim());
+ let siteId;
  try{
  if(route==='oauth/callback'){
   if(request.method!=='GET')return json({error:'Method not allowed'},405);
@@ -33,6 +34,7 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
  }
  if(!origin||!allowed.includes(origin))throw error(403,'ORIGIN_FORBIDDEN','このサイトからの接続は許可されていません。');
  const identity=await privateIdentity(request,env);if(!identity)throw error(401,'SITE_SESSION_REQUIRED','サイトにログインしてください。');
+ siteId=identity.id;
  const limited=await privateRateLimit(env.DB,identity.id,url.pathname,request.method);if(limited)return limited;
  if(Number(request.headers.get('content-length')||0)>32768)throw error(413,'PAYLOAD_TOO_LARGE','送信データが大きすぎます。');
  const key=`social-link:${service}:${identity.id}`,link=await db.read(key),privateKey=`social-private:${service}:${identity.id}`,privateLink=await db.read(privateKey);
@@ -49,6 +51,7 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
  }
  if(route==='unofficial/disconnect'&&request.method==='POST'){await db.remove(privateKey);return json({success:true});}
  if(['feed','stories','threads','messages','messages/send'].includes(route)){
+  const cooldown=await db.read(`social-cooldown:${service}:${identity.id}`);if(cooldown?.until>Date.now())throw error(429,'SOCIAL_COOLDOWN','サービス側の制限を検出したため接続を停止しています。時間をおいて公式アプリで状態を確認してください。');
   if(!privateLink)throw error(401,'PRIVATE_SESSION_REQUIRED','ログイン済みアカウントのセッション連携が必要です。');
   const cursor=url.searchParams.get('cursor')||'';if(cursor.length>2000)throw error(400,'CURSOR','続きの情報が無効です。');
   if(route==='feed'&&request.method==='GET')return json(await privateFeed(service,privateLink,cursor,fetcher));
@@ -97,6 +100,6 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
   return json({items:(data.data||[]).map(v=>({id:'ig:'+v.id,service,title:v.caption||'',author:link.user.username,authorId:link.user.id,profileUsername:link.user.username,kind:v.media_type==='VIDEO'?'video':v.media_type==='CAROUSEL_ALBUM'?'carousel':'image',media:v.media_url,thumbnail:v.thumbnail_url||v.media_url,url:v.permalink,timestamp:Date.parse(v.timestamp),children:v.children?.data?.map(c=>({kind:c.media_type==='VIDEO'?'video':'image',media:c.media_url}))||[]})),cursor:data.paging?.cursors?.after&&data.paging?.next?data.paging.cursors.after:'',source:'official-own-media'});
  }
  return json({error:'この機能は公式サービスで利用してください。',code:'CAPABILITY_UNAVAILABLE'},501);
- }catch(err){console.warn(JSON.stringify({event:'social_api_error',service,operation:route,status:err.status||502,code:err.code||'SOCIAL_UPSTREAM_FAILED'}));return json({error:err.code?err.message:'外部サービスとの通信に失敗しました。時間をおいて再試行してください。',code:err.code||'SOCIAL_UPSTREAM_FAILED'},err.status||502);}
+ }catch(err){if(siteId&&['SESSION_REJECTED','SOCIAL_THROTTLED'].includes(err.code)){try{const until=Date.now()+(err.code==='SOCIAL_THROTTLED'?300000:900000);await db.write(`social-cooldown:${service}:${siteId}`,{until},until);}catch{}}console.warn(JSON.stringify({event:'social_api_error',service,operation:route,status:err.status||502,code:err.code||'SOCIAL_UPSTREAM_FAILED'}));return json({error:err.code?err.message:'外部サービスとの通信に失敗しました。時間をおいて再試行してください。',code:err.code||'SOCIAL_UPSTREAM_FAILED'},err.status||502);}
  };}
 export const handleSocialApi=createSocialApi();
