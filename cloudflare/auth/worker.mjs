@@ -1,3 +1,4 @@
+import {requestJson} from '../security/http.mjs';
 import { randomBytes, scryptSync, createHash, timingSafeEqual } from 'node:crypto';
 
 const MAX_AGE = 60 * 60 * 24 * 30;
@@ -40,7 +41,7 @@ export default {
         return user ? json({ user }) : json({ error: 'ログインが必要です。' }, 401);
       }
       if (request.method === 'POST' && (path === '/register' || path === '/login')) {
-        const body = await request.json();
+        const body = await requestJson(request);
         const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
         const password = body.password;
         if (!validUser(username) || !validPass(password)) return json({ error: 'ユーザー名は英小文字・数字・_で3〜32文字、パスワードは12文字以上です。' }, 400);
@@ -71,7 +72,7 @@ export default {
         return json({ history: row ? JSON.parse(row.data) : [], version: row?.version || 0 });
       }
       if (request.method === 'PUT' && path === '/history') {
-        const body = await request.json();
+        const body = await requestJson(request);
         if (!Array.isArray(body.history) || body.history.length > 100 || !Number.isSafeInteger(body.version) || body.version < 0) return json({ error: '履歴データが不正です。' }, 400);
         const data = JSON.stringify(body.history);
         if (Buffer.byteLength(data) > 100000) return json({ error: '履歴データが大きすぎます。' }, 413);
@@ -82,7 +83,8 @@ export default {
       }
       return json({ error: '見つかりません。' }, 404);
     } catch (err) {
-      console.error('account request failed', err);
+      console.warn(JSON.stringify({event:'account_request_failed',status:err.status||500,code:err.code||'ACCOUNT_FAILED'}));
+      if(err.status===400||err.status===413)return json({error:err.message},err.status);
       return json({ error: '処理に失敗しました。時間をおいてお試しください。' }, 500);
     }
   }

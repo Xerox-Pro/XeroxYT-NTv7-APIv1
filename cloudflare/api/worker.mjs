@@ -1,9 +1,10 @@
+import {secureApiResponse} from '../security/http.mjs';
 import {handleSocialApi,socialCallback} from '../social/api.mjs';
 import {privatePath,handlePrivateApi,issuePrivateTicket} from './private-api.mjs';
 import {authorizeSource} from '../../access-policy.mjs';
 import accountWorker from '../auth/worker.mjs';
 import {handleYouTubeStore} from '../../youtube-store-bridge.mjs';
-export default {async fetch(request,env){
+async function handleRequest(request,env){
  const pathName=new URL(request.url).pathname;
  if(socialCallback(pathName))return handleSocialApi(request,env);
  const direct=(privatePath(pathName)||/^\/api\/(instagram|tiktok)(\/|$)/.test(pathName))&&/^XYT /.test(request.headers.get('Authorization')||'');
@@ -30,4 +31,5 @@ export default {async fetch(request,env){
   }
  }catch(error){console.warn(JSON.stringify({event:'api_proxy_error',name:error.name||'Error'}));response=Response.json({error:'サーバーとの通信に失敗しました。再試行してください。',code:'API_UPSTREAM_FAILED'},{status:502});}
  const headers=new Headers(response.headers);for(const[k,v]of Object.entries(cors))headers.set(k,v);headers.set('X-XeroxYT-Proxy','cloudflare');return new Response(response.body,{status:response.status,headers});
-}};
+}
+export default {async fetch(request,env){const response=await handleRequest(request,env);return /^\/(api|internal)(\/|$)|^\/health$/.test(new URL(request.url).pathname)?secureApiResponse(response):response;}};

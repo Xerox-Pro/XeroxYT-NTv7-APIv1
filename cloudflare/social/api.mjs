@@ -1,3 +1,4 @@
+import {sessionCookies,probeSession,privateFeed,privateThreads,privateMessages,privateSend,privateStories,boundedBytes,fail} from './unofficial.mjs';
 import {randomBytes,createHash} from 'node:crypto';
 import {credentialVault} from '../../youtube-account.mjs';
 import {privateIdentity} from '../api/private-api.mjs';
@@ -34,13 +35,35 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
  const identity=await privateIdentity(request,env);if(!identity)throw error(401,'SITE_SESSION_REQUIRED','サイトにログインしてください。');
  const limited=await privateRateLimit(env.DB,identity.id,url.pathname,request.method);if(limited)return limited;
  if(Number(request.headers.get('content-length')||0)>32768)throw error(413,'PAYLOAD_TOO_LARGE','送信データが大きすぎます。');
- const key=`social-link:${service}:${identity.id}`,link=await db.read(key);
+ const key=`social-link:${service}:${identity.id}`,link=await db.read(key),privateKey=`social-private:${service}:${identity.id}`,privateLink=await db.read(privateKey);
  if(route==='embed-info'&&request.method==='GET'&&service==='tiktok'){
   let target;try{target=new URL(url.searchParams.get('url'));}catch{throw error(400,'PUBLIC_LINK','公開投稿のURLが無効です。');}
   const match=target.pathname.match(/^\/@([A-Za-z0-9._]{1,40})\/(?:video|photo)\/(\d{10,25})\/?$/);if(target.protocol!=='https:'||target.username||target.password||target.port||!['www.tiktok.com','tiktok.com'].includes(target.hostname)||!match)throw error(400,'PUBLIC_LINK','公開投稿のURLが無効です。');
   const canonical=`https://www.tiktok.com/@${match[1]}/video/${match[2]}`;const result=await provider(fetcher,'https://www.tiktok.com/oembed?url='+encodeURIComponent(canonical));
   return json({title:typeof result.title==='string'?result.title.slice(0,1000):'',author:match[1],thumbnail:typeof result.thumbnail_url==='string'&&result.thumbnail_url.startsWith('https://')?result.thumbnail_url:''});
  }
+ const unofficialEnabled=env.SOCIAL_UNOFFICIAL_ENABLED==='true';
+ if(!unofficialEnabled&&(route.startsWith('unofficial/')||['feed','stories','threads','messages','messages/send'].includes(route)))throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式接続は安全性と動作の検証が完了するまで利用できません。');
+ if(route==='unofficial/connect'&&request.method==='POST'){
+  if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const raw=new TextDecoder().decode(await boundedBytes(request,32768));if(raw.length>20000)throw error(413,'PAYLOAD_TOO_LARGE','接続情報が大きすぎます。');let body;try{body=JSON.parse(raw);}catch{throw error(400,'FORMAT','接続情報の形式が無効です。');}if(body.consent!==true)throw error(400,'CONSENT','非公式接続の注意事項を確認してください。');const candidate={cookies:sessionCookies(body.cookies,service),deviceId:/^\d{10,25}$/.test(body.deviceId||'')?body.deviceId:'',region:'JP',userAgent:(request.headers.get('user-agent')||'XeroxYT social client').slice(0,300)};const verified=await probeSession(service,candidate,fetcher);await db.write(privateKey,{...candidate,...verified,connectedAt:Date.now()},Date.now()+30*86400000);return json({connected:true,user:verified.user,capabilities:verified.capabilities});
+ }
+ if(route==='unofficial/disconnect'&&request.method==='POST'){await db.remove(privateKey);return json({success:true});}
+ if(['feed','stories','threads','messages','messages/send'].includes(route)){
+  if(!privateLink)throw error(401,'PRIVATE_SESSION_REQUIRED','ログイン済みアカウントのセッション連携が必要です。');
+  const cursor=url.searchParams.get('cursor')||'';if(cursor.length>2000)throw error(400,'CURSOR','続きの情報が無効です。');
+  if(route==='feed'&&request.method==='GET')return json(await privateFeed(service,privateLink,cursor,fetcher));
+  if(route==='stories'&&request.method==='GET')return json(await privateStories(service,privateLink,url.searchParams.get('id')||'',fetcher));
+  if(route==='threads'&&request.method==='GET')return json({...await privateThreads(service,privateLink,cursor,fetcher),selfId:privateLink.user.id});
+  if(route==='messages'&&request.method==='GET')return json({...await privateMessages(service,privateLink,{id:url.searchParams.get('thread')||'',shortId:url.searchParams.get('shortId')||'',type:Number(url.searchParams.get('type'))||1},cursor,fetcher),selfId:privateLink.user.id});
+  if(route==='messages/send'&&request.method==='POST'){
+   if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const raw=new TextDecoder().decode(await boundedBytes(request,32768));if(raw.length>12000)throw error(413,'PAYLOAD_TOO_LARGE','本文が長すぎます。');let body;try{body=JSON.parse(raw);}catch{throw error(400,'FORMAT','送信形式が無効です。');}
+   if(!/^[-a-f0-9]{36}$/.test(body.clientId||''))throw error(400,'SEND_ID','送信IDが無効です。');
+   await env.DB.prepare("DELETE FROM api_oauth_flows WHERE user_id LIKE 'social-send:%' AND expires_at<=?").bind(Date.now()).run();
+   const nonce=`social-send:${service}:${identity.id}:${body.clientId}`;const claimed=await env.DB.prepare('INSERT INTO api_oauth_flows(user_id,data,expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO NOTHING RETURNING user_id').bind(nonce,JSON.stringify({pending:true}),Date.now()+86400000).first();if(!claimed)throw error(409,'SEND_UNCERTAIN','同じ送信の結果を確認中です。会話を更新し、送信済みか確認してください。');
+   const result=await privateSend(service,privateLink,{id:body.threadId,shortId:body.shortId,type:body.type||1},body.text,body.clientId,fetcher);return json({success:true,id:result.id});
+  }
+ }
+ if(route==='status'&&request.method==='GET'&&privateLink&&unofficialEnabled)return json({service,configured:config.ready,connected:true,mode:'unofficial',user:privateLink.user,capabilities:{...privateLink.capabilities,ownMedia:!!link,publicEmbeds:true,platformActions:false},notice:'ログイン済みアカウントの非公式接続です。追加認証・機能制限・アカウント制限が発生する場合があります。'});
  if(route==='status'&&request.method==='GET')return json({service,configured:config.ready,connected:!!link,user:link?.user||null,expired:!!link&&link.expiresAt<=Date.now(),capabilities:{ownMedia:config.ready,publicEmbeds:true,homeFeed:false,forYou:false,stories:false,messaging:false,search:false,platformActions:false},notice:service==='instagram'?'公式連携はプロアカウントの自分の投稿が対象です。一般アカウントのホーム・DMは公式サイトで利用できます。':'公式連携は自分のプロフィールと公開投稿が対象です。For You・フォロー中・DMは公式サイトで利用できます。'});
  if(route==='oauth/start'&&request.method==='POST'){
   if(!config.ready)throw error(503,'OAUTH_NOT_CONFIGURED','公式OAuthのキー・コールバックURL・審査設定が必要です。');
@@ -56,7 +79,7 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
  }
  if(route==='preferences'){
   const prefKey=`social-preferences:${service}:${identity.id}`;if(request.method==='GET')return json(await db.read(prefKey)||{signals:{},crossService:false});
-  if(request.method==='PUT'){if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const text=await request.text();if(text.length>32000)throw error(413,'PAYLOAD_TOO_LARGE','設定が大きすぎます。');let body;try{body=JSON.parse(text);}catch{throw error(400,'FORMAT','設定が無効です。');}const signals=Object.fromEntries(Object.entries(body.signals||{}).slice(0,200).filter(([id,v])=>id.length<=120&&Number.isFinite(v?.weight)&&Number.isFinite(v?.at)).map(([id,v])=>[id,{weight:Math.max(-20,Math.min(20,v.weight)),at:v.at}]));await db.write(prefKey,{signals,crossService:false});return json({success:true});}
+  if(request.method==='PUT'){if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const text=new TextDecoder().decode(await boundedBytes(request,32768));if(text.length>32000)throw error(413,'PAYLOAD_TOO_LARGE','設定が大きすぎます。');let body;try{body=JSON.parse(text);}catch{throw error(400,'FORMAT','設定が無効です。');}const signals=Object.fromEntries(Object.entries(body.signals||{}).slice(0,200).filter(([id,v])=>id.length<=120&&Number.isFinite(v?.weight)&&Number.isFinite(v?.at)).map(([id,v])=>[id,{weight:Math.max(-20,Math.min(20,v.weight)),at:v.at}]));await db.write(prefKey,{signals,crossService:false});return json({success:true});}
  }
  if(route==='media'&&request.method==='GET'){
   if(!link)throw error(401,'SOCIAL_NOT_LINKED','アカウントを連携してください。');let token=link.access_token;

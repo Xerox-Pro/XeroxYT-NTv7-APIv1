@@ -16,7 +16,8 @@
   "dependencies": {
     "axios": "^1.19.0",
     "express": "^4.21.2",
-    "youtubei.js": "^18.0.0"
+    "youtubei.js": "^18.0.0",
+    "@bufbuild/protobuf": "^2.16.0"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
