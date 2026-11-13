@@ -16,7 +16,8 @@
   "vars": {
     "NODE_ENV": "production",
     "ALLOWED_ORIGINS": "https://your-frontend.vercel.app",
-    "REQUIRE_PROXY_SECRET": "true"
+    "REQUIRE_PROXY_SECRET": "true",
+    "SOCIAL_BROWSER_PROVIDER": "vercel"
   },
   "observability": {
     "enabled": true,

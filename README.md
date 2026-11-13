@@ -144,3 +144,10 @@ Node起動の `/health` とCORS/未認証拒否はローカルで検証してい
 RenderはHTTPのhealthCheckPathを設定せず、TCPの起動確認を使用します。APIの `/health` を外から確認する場合も、許可Originと共有鍵が必要です。サイト経由の `/api/health` はゲートウェイが必要なヘッダーを付けます。
 
 実際のデプロイURL・許可Origin・共有キーはホスティング側の環境変数で設定してください。このリポジトリのURLはすべて例示用です。個人の接続先をコミットしないでください。
+
+
+### Production transport
+
+All YouTube and social API processing runs in Cloudflare Workers. The frontend gateway accepts only workers.dev upstreams. Vercel API backend projects are no longer used. A minimal same-origin frontend relay remains for first-party cookies and clients that cannot access Workers directly.
+
+Interactive social login alone runs Chromium in an isolated, nonpersistent Vercel Sandbox for up to ten minutes. Set SOCIAL_BROWSER_PROVIDER=vercel on the Worker and use the same server-only API_SHARED_SECRET on the Worker and frontend. Passwords and verification codes are never persisted; filtered session cookies remain encrypted in D1. Browser authentication and unofficial provider support may still be challenged or rejected by the provider.

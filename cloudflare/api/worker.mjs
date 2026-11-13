@@ -25,7 +25,7 @@ async function handleRequest(request,env,ctx){
   else{
    const {publicHandler}=await import('./native-public.mjs');response=await publicHandler.fetch(request,env,ctx);
   }
- }catch(error){console.warn(JSON.stringify({event:'api_proxy_error',name:error.name||'Error'}));response=Response.json({error:'サーバーとの通信に失敗しました。再試行してください。',code:'API_UPSTREAM_FAILED'},{status:502});}
+ }catch(error){console.warn(JSON.stringify({event:'api_proxy_error',name:error.name||'Error',reason:/[\w.$]+ is not a function/.exec(error.message)?.[0]||(/I\/O/.test(error.message)?'request_context':'other'),frames:String(error.stack||'').split('\n').slice(1,3)}));response=Response.json({error:'サーバーとの通信に失敗しました。再試行してください。',code:'API_UPSTREAM_FAILED'},{status:502});}
  const headers=new Headers(response.headers);for(const[k,v]of Object.entries(cors))headers.set(k,v);headers.set('X-XeroxYT-Proxy','cloudflare');return new Response(response.body,{status:response.status,headers});
 }
 export default {async fetch(request,env,ctx){const response=await handleRequest(request,env,ctx);return /^\/(api|internal)(\/|$)|^\/health$/.test(new URL(request.url).pathname)?secureApiResponse(response):response;}};
