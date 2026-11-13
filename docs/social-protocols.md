@@ -47,3 +47,21 @@ Mutations share an account/service-scoped one-time client ID claim. Client code
 must not automatically retry an uncertain result. Disconnect removes unofficial
 credentials as well as official OAuth credentials. This does not invalidate the
 provider's browser session; the account owner can revoke it in the official app.
+
+## TikTok feed / search / interactions (2026-11-13)
+
+For You batch semantics, following request fields and search response variants
+were checked against the endpoint declarations in
+[caixax/opentok](https://github.com/caixax/opentok) and search/trending interfaces in
+[davidteather/TikTok-Api](https://github.com/davidteather/TikTok-Api).
+No browser fingerprint modification, signing algorithm or challenge bypass was
+imported. Providers can reject direct server requests. Empty/invalid responses
+fail closed instead of fabricating content or retrying in a loop.
+
+For You requests return fresh batches; following uses its own provider cursor.
+The frontend stops automatic pagination if an append contains no new IDs.
+Video search accepts item_list; user search accepts user_list[].user_info.
+Account identity accepts user_id_str before a numeric user_id to preserve IDs.
+TikTok likes/comment writes use POST with an empty form body and the user's own
+session tt_csrf_token header. Missing CSRF prevents writes before network I/O.
+These adapters are verified with mocked responses only, not real accounts.

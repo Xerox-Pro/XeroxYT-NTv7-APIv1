@@ -1,4 +1,4 @@
-import {privateSearch,privateComments,privateAction,sessionCookies,probeSession,privateFeed,privateThreads,privateMessages,privateSend,privateStories,boundedBytes,fail} from './unofficial.mjs';
+import {privateFollowing,privateSearch,privateComments,privateAction,sessionCookies,probeSession,privateFeed,privateThreads,privateMessages,privateSend,privateStories,boundedBytes,fail} from './unofficial.mjs';
 import {randomBytes,createHash} from 'node:crypto';
 import {credentialVault} from '../../youtube-account.mjs';
 import {privateIdentity} from '../api/private-api.mjs';
@@ -45,17 +45,18 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
   return json({title:typeof result.title==='string'?result.title.slice(0,1000):'',author:match[1],thumbnail:typeof result.thumbnail_url==='string'&&result.thumbnail_url.startsWith('https://')?result.thumbnail_url:''});
  }
  const unofficialEnabled=env.SOCIAL_UNOFFICIAL_ENABLED==='true';
- if(!unofficialEnabled&&(route.startsWith('unofficial/')||['feed','stories','threads','messages','messages/send','search','comments','likes','notes'].includes(route)))throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式接続は安全性と動作の検証が完了するまで利用できません。');
+ if(!unofficialEnabled&&(route.startsWith('unofficial/')||['feed','stories','threads','messages','messages/send','following','search','comments','likes','notes'].includes(route)))throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式接続は安全性と動作の検証が完了するまで利用できません。');
  if(route==='unofficial/connect'&&request.method==='POST'){
   if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const raw=new TextDecoder().decode(await boundedBytes(request,32768));if(raw.length>20000)throw error(413,'PAYLOAD_TOO_LARGE','接続情報が大きすぎます。');let body;try{body=JSON.parse(raw);}catch{throw error(400,'FORMAT','接続情報の形式が無効です。');}if(body.consent!==true)throw error(400,'CONSENT','非公式接続の注意事項を確認してください。');const candidate={cookies:sessionCookies(body.cookies,service),deviceId:/^\d{10,25}$/.test(body.deviceId||'')?body.deviceId:'',region:'JP',uuid:crypto.randomUUID(),userAgent:(request.headers.get('user-agent')||'XeroxYT social client').slice(0,300)};const verified=await probeSession(service,candidate,fetcher);await db.write(privateKey,{...candidate,...verified,connectedAt:Date.now()},Date.now()+30*86400000);return json({connected:true,user:verified.user,capabilities:verified.capabilities});
  }
  if(route==='unofficial/disconnect'&&request.method==='POST'){await db.remove(privateKey);return json({success:true});}
- if(['feed','stories','threads','messages','messages/send','search','comments','likes','notes'].includes(route)){
+ if(['feed','stories','threads','messages','messages/send','following','search','comments','likes','notes'].includes(route)){
   const cooldown=await db.read(`social-cooldown:${service}:${identity.id}`);if(cooldown?.until>Date.now())throw error(429,'SOCIAL_COOLDOWN','サービス側の制限を検出したため接続を停止しています。時間をおいて公式アプリで状態を確認してください。');
   if(!privateLink)throw error(401,'PRIVATE_SESSION_REQUIRED','ログイン済みアカウントのセッション連携が必要です。');
   const cursor=url.searchParams.get('cursor')||'';if(cursor.length>2000)throw error(400,'CURSOR','続きの情報が無効です。');
-  if(route==='search'&&request.method==='GET')return json(await privateSearch(service,privateLink,url.searchParams.get('q')||'',fetcher));
+  if(route==='search'&&request.method==='GET')return json(await privateSearch(service,privateLink,url.searchParams.get('q')||'',fetcher,url.searchParams.get('kind')||'videos',cursor));
   if(route==='comments'&&request.method==='GET')return json(await privateComments(service,privateLink,url.searchParams.get('mediaId')||'',cursor,fetcher));
+  if(route==='following'&&request.method==='GET')return json(await privateFollowing(service,privateLink,cursor,fetcher));
   if(route==='feed'&&request.method==='GET')return json(await privateFeed(service,privateLink,cursor,fetcher));
   if(route==='stories'&&request.method==='GET')return json(await privateStories(service,privateLink,url.searchParams.get('id')||'',fetcher));
   if(route==='threads'&&request.method==='GET')return json({...await privateThreads(service,privateLink,cursor,fetcher),selfId:privateLink.user.id});
