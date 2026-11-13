@@ -9,7 +9,7 @@ test('only service cookies are accepted; control characters and other service na
  assert.throws(()=>sessionCookies({sessionid:'test'},'unknown'));
 });
 test('authenticated reads use fixed HTTPS destinations and cannot follow redirects with cookies',async()=>{
- await privateProfile('instagram',link,async(url,init)=>{assert.equal(url,'https://www.instagram.com/api/v1/accounts/current_user/?edit=true');assert.equal(init.redirect,'error');assert.equal(init.headers.Cookie,'sessionid=test-session; csrftoken=test-csrf');return Response.json({user:{pk:1,username:'test'}});});
+ await privateProfile('instagram',link,async(url,init)=>{assert.equal(url,'https://www.instagram.com/api/v1/accounts/current_user/?edit=true');assert.equal(init.redirect,'manual');assert.equal(init.headers.Cookie,'sessionid=test-session; csrftoken=test-csrf');return Response.json({user:{pk:1,username:'test'}});});
  await privateFeed('instagram',link,'https://attacker.test/',async(url,init)=>{assert.equal(new URL(url).hostname,'www.instagram.com');assert.equal(new URLSearchParams(init.body).get('max_id'),'https://attacker.test/');return Response.json({items:[]});});
 });
 test('stream bounds cancel oversized bodies even without Content-Length',async()=>{
@@ -28,4 +28,9 @@ test('authentication challenges never silently enable private features',async()=
 test('DM send rejects invalid data before network and never fabricates an acknowledgement',async()=>{
  let calls=0;await assert.rejects(privateSend('instagram',link,{id:'../../evil'},'text','11111111-1111-1111-1111-111111111111',async()=>{calls++;}),{code:'MESSAGE'});assert.equal(calls,0);
  await assert.rejects(privateSend('instagram',link,{id:'123'},'text','11111111-1111-1111-1111-111111111111',async()=>Response.json({status:'ok'})),{code:'SEND_UNCERTAIN'});
+});
+
+test('Cloudflare-compatible redirect mode rejects redirects instead of forwarding private cookies',async()=>{
+ let calls=0;const fetcher=async(url,init)=>{calls++;assert.equal(init.redirect,'manual');return new Response(null,{status:302,headers:{Location:'https://attacker.test/'}});};
+ await assert.rejects(privateProfile('instagram',link,fetcher),{code:'SESSION_REDIRECT'});assert.equal(calls,1);
 });
