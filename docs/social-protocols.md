@@ -71,12 +71,14 @@ These adapters are verified with mocked responses only, not real accounts.
 `POST login/start` creates a distinct Cloudflare Browser Run session per site
 account and service after consent. Recording is disabled. Its identifier is kept
 in the existing encrypted D1 store, expires after ten minutes, and is never
-accepted from a client parameter. The short-lived Live View URL is returned only
-to the authenticated account with no-store headers and is not persisted.
-Users complete the official login themselves in Live View, then explicitly choose
+accepted from a client parameter. No external Live View URL is generated. Authenticated POST login/view returns
+a no-store screenshot through the Vercel gateway. POST login/input accepts only
+bounded clicks, text, allowed keys and scroll operations. Arbitrary CDP methods
+and URLs are never accepted from the client.
+Users complete the official login themselves using the relayed screenshot and input controls, then explicitly choose
 `login/finish`. Network.getCookies reads only the selected service's HTTPS origin.
 Only allowlisted session cookies are saved, encrypted under the account/service
-key. Passwords and OTPs are neither submitted to this API nor logged. Finishing
+key. Passwords and OTPs pass transiently through the authenticated input relay. They are not logged, stored or echoed in API responses. Finishing
 or cancelling closes the browser. Provider restrictions remain possible; no
 challenge solving or fingerprint bypass is implemented. Production requires a
 Cloudflare `browser` binding named `BROWSER`.
