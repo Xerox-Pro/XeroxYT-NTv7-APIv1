@@ -65,3 +65,20 @@ Account identity accepts user_id_str before a numeric user_id to preserve IDs.
 TikTok likes/comment writes use POST with an empty form body and the user's own
 session tt_csrf_token header. Missing CSRF prevents writes before network I/O.
 These adapters are verified with mocked responses only, not real accounts.
+
+## Dedicated browser login
+
+`POST login/start` creates a distinct Cloudflare Browser Run session per site
+account and service after consent. Recording is disabled. Its identifier is kept
+in the existing encrypted D1 store, expires after ten minutes, and is never
+accepted from a client parameter. The short-lived Live View URL is returned only
+to the authenticated account with no-store headers and is not persisted.
+Users complete the official login themselves in Live View, then explicitly choose
+`login/finish`. Network.getCookies reads only the selected service's HTTPS origin.
+Only allowlisted session cookies are saved, encrypted under the account/service
+key. Passwords and OTPs are neither submitted to this API nor logged. Finishing
+or cancelling closes the browser. Provider restrictions remain possible; no
+challenge solving or fingerprint bypass is implemented. Production requires a
+Cloudflare `browser` binding named `BROWSER`.
+
+Protocol reference: https://developers.cloudflare.com/browser-run/reference/browser-binding-api/
