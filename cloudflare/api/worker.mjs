@@ -4,7 +4,7 @@ import {privatePath,handlePrivateApi,issuePrivateTicket} from './private-api.mjs
 import {authorizeSource} from '../../access-policy.mjs';
 import accountWorker from '../auth/worker.mjs';
 import {handleYouTubeStore} from '../../youtube-store-bridge.mjs';
-async function handleRequest(request,env){
+async function handleRequest(request,env,ctx){
  const pathName=new URL(request.url).pathname;
  if(socialCallback(pathName))return handleSocialApi(request,env);
  const direct=(privatePath(pathName)||/^\/api\/(instagram|tiktok)(\/|$)/.test(pathName))&&/^XYT /.test(request.headers.get('Authorization')||'');
@@ -20,16 +20,12 @@ async function handleRequest(request,env){
   else if(/^\/api\/(instagram|tiktok)(\/|$)/.test(path))response=await handleSocialApi(request,env);
   else if(privatePath(path))response=await handlePrivateApi(request,env);
   else if(path.startsWith('/api/account/'))response=await accountWorker.fetch(request,env);
-  else if(path==='/health')response=Response.json({ok:true,runtime:'cloudflare-proxy',implementation:'node-youtube-d1-accounts'});
+  else if(path==='/health')response=Response.json({ok:true,runtime:'cloudflare-workers',implementation:'full-express-api'});
   else if(/^\/api\/download(?:-|\/|$)/.test(path))response=Response.json({error:'ダウンロード機能は削除されました。',code:'DOWNLOAD_REMOVED'},{status:410});
   else{
-   // Keep Cloudflare as the entry proxy. YouTube parsing runs on Node rather
-   // than exhausting the Worker's CPU limit; stream all response bodies.
-   const upstream=new URL('https://xeroxyt-ntv6-apiv1.vercel.app');upstream.pathname=path;upstream.search=url.search;
-   response=await fetch(new Request(upstream,request),{redirect:'manual'});
-   if(response.status>=300&&response.status<400){await response.body?.cancel();response=Response.json({error:'API接続先が予期しない応答を返しました。',code:'UPSTREAM_REDIRECT'},{status:502});}
+   const {publicHandler}=await import('./native-public.mjs');response=await publicHandler.fetch(request,env,ctx);
   }
  }catch(error){console.warn(JSON.stringify({event:'api_proxy_error',name:error.name||'Error'}));response=Response.json({error:'サーバーとの通信に失敗しました。再試行してください。',code:'API_UPSTREAM_FAILED'},{status:502});}
  const headers=new Headers(response.headers);for(const[k,v]of Object.entries(cors))headers.set(k,v);headers.set('X-XeroxYT-Proxy','cloudflare');return new Response(response.body,{status:response.status,headers});
 }
-export default {async fetch(request,env){const response=await handleRequest(request,env);return /^\/(api|internal)(\/|$)|^\/health$/.test(new URL(request.url).pathname)?secureApiResponse(response):response;}};
+export default {async fetch(request,env,ctx){const response=await handleRequest(request,env,ctx);return /^\/(api|internal)(\/|$)|^\/health$/.test(new URL(request.url).pathname)?secureApiResponse(response):response;}};
