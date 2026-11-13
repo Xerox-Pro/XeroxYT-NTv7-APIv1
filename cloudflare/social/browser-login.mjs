@@ -3,7 +3,7 @@ const LOGIN_URLS={instagram:'https://www.instagram.com/accounts/login/',tiktok:'
 export function cdpCommand(socket,method,params={}){return new Promise((resolve,reject)=>{const id=1;const done=()=>{clearTimeout(timer);socket.removeEventListener('message',receive);socket.removeEventListener('close',closed);};const closed=()=>{done();reject(fail('LOGIN_BROWSER_CLOSED','ログイン画面が閉じられました。もう一度開始してください。',409));};const receive=event=>{let data;try{data=JSON.parse(event.data);}catch{return;}if(data.id!==id)return;done();if(data.error)reject(fail('LOGIN_BROWSER_FAILED','ログイン画面との通信に失敗しました。',502));else resolve(data.result);};const timer=setTimeout(()=>{done();reject(fail('LOGIN_BROWSER_TIMEOUT','ログイン画面の応答がありません。',504));},10000);socket.addEventListener('message',receive);socket.addEventListener('close',closed);try{socket.send(JSON.stringify({id,method,params}));}catch{closed();}});}
 async function vercelBrowser(env,body){
  const response=await fetch('https://xeroxapp044.vercel.app/api/social-browser',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+env.API_SHARED_SECRET},body:JSON.stringify(body),redirect:'manual',signal:AbortSignal.timeout(body.operation==='create'?20000:15000)});
- if(response.status===409){const detail=await response.json().catch(()=>({}));if(['LOGIN_FIELD_NOT_FOUND','LOGIN_INPUT'].includes(detail.error))throw fail(detail.error,detail.error==='LOGIN_FIELD_NOT_FOUND'?'対応する入力欄が見つかりません。公式画面でユーザー名・パスワードによるログイン、または認証コードの画面を開いてください。':'入力内容を確認してください。',409);}
+ if(response.status===409){const detail=await response.json().catch(()=>({}));if(['LOGIN_BUTTON_NOT_FOUND','LOGIN_FIELD_NOT_FOUND','LOGIN_INPUT'].includes(detail.error))throw fail(detail.error,detail.error==='LOGIN_BUTTON_NOT_FOUND'?'対応するボタンが見つからないか、まだ押せません。入力内容と現在の公式画面を確認してください。':detail.error==='LOGIN_FIELD_NOT_FOUND'?'対応する入力欄が見つかりません。公式画面でユーザー名・パスワードによるログイン、または認証コードの画面を開いてください。':'入力内容を確認してください。',409);}
  if(!response.ok){console.warn(JSON.stringify({event:'browser_bridge_error',operation:body.operation,status:response.status}));throw Object.assign(fail('LOGIN_BROWSER_UNAVAILABLE','Vercelのログイン用ブラウザに接続できません。',503),{upstreamStatus:response.status});}
  return response.json();
 }
@@ -24,7 +24,11 @@ export async function browserLogin({route,service,request,env,db,identity,fetche
  if(!old||old.expiresAt<=Date.now())throw fail('LOGIN_EXPIRED','ログイン画面の期限が切れました。もう一度開始してください。',409);
  if(route==='login/input'){
   const body=await request.json();
-  if(body.action==='field'){
+  if(body.action==='button'){
+   if(!['login','next','verify'].includes(body.button))throw fail('LOGIN_INPUT','未対応のボタンです。',400);
+   if(old.provider!=='vercel')throw fail('LOGIN_RESTART','ログイン画面を開き直してください。',409);
+   await command(env,old,'Xerox.pressLoginButton',{service,button:body.button});
+  }else if(body.action==='field'){
    if(!['username','password','code'].includes(body.field)||typeof body.value!=='string'||!body.value||body.value.length>500)throw fail('LOGIN_INPUT','入力内容を確認してください。',400);
    if(old.provider!=='vercel')throw fail('LOGIN_RESTART','ログイン画面を開き直してください。',409);
    await command(env,old,'Xerox.fillLoginField',{service,field:body.field,value:body.value});

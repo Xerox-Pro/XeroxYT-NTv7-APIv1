@@ -20,3 +20,9 @@ test('dedicated login fields validate kind and keep passwords out of stored stat
   assert.equal(JSON.stringify([...x.rows]).includes('test-only-secret'),false);assert.equal(commands.at(-1).method,'Xerox.fillLoginField');assert.equal(commands.at(-1).params.field,'code');await assert.rejects(browserLogin({...args,route:'login/input',request:input({action:'field',field:'arbitrary',value:'test'})}),{code:'LOGIN_INPUT'});
  }finally{globalThis.fetch=original;}
 });
+
+test('login action buttons are allowlisted and target the account-owned browser',async()=>{
+ const x=setup(),original=globalThis.fetch,calls=[];
+ globalThis.fetch=async(url,init)=>{const body=JSON.parse(init.body);calls.push(body);return Response.json(body.operation==='create'?{sessionId:'social-login-00000000-0000-0000-0000-000000000001',targetId:'page',provider:'vercel'}:{success:true});};
+ try{const args={service:'instagram',env:{SOCIAL_BROWSER_PROVIDER:'vercel',API_SHARED_SECRET:'test'},db:x.db,identity:{id:'alice'},request:req(true)};await browserLogin({...args,route:'login/start'});const input=button=>new Request('https://site.test/api/instagram/login/input',{method:'POST',body:JSON.stringify({action:'button',button})});for(const button of ['login','next','verify']){assert.equal((await browserLogin({...args,route:'login/input',request:input(button)})).success,true);assert.equal(calls.at(-1).method,'Xerox.pressLoginButton');assert.deepEqual(calls.at(-1).params,{service:'instagram',button});}await assert.rejects(browserLogin({...args,route:'login/input',request:input('delete_account')}),{code:'LOGIN_INPUT'});await assert.rejects(browserLogin({...args,identity:{id:'bob'},route:'login/input',request:input('login')}),{code:'LOGIN_EXPIRED'});}finally{globalThis.fetch=original;}
+});
