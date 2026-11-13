@@ -29,3 +29,21 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Instagram interactions (2026-11-13)
+
+Search, comment, like/unlike and personal note request fields were checked against
+[subzeroid/instagrapi](https://github.com/subzeroid/instagrapi), specifically
+`mixins/fbsearch.py`, `mixins/comment.py`, `mixins/media.py` and `mixins/note.py`.
+These adapters implement protocol requests independently; no signing code or
+challenge bypass is included. Notes explicitly select audience 0 (mutual
+followers) or 1 (close friends). They require a provider acknowledgement before
+reporting success. No real-account write test was performed.
+
+The consent-gated session import is controlled by `SOCIAL_UNOFFICIAL_ENABLED`.
+Connection probes never send messages, likes, comments or notes. Write adapter
+availability is not proof that a live provider accepts that operation.
+Mutations share an account/service-scoped one-time client ID claim. Client code
+must not automatically retry an uncertain result. Disconnect removes unofficial
+credentials as well as official OAuth credentials. This does not invalidate the
+provider's browser session; the account owner can revoke it in the official app.

@@ -1,4 +1,4 @@
-import {sessionCookies,probeSession,privateFeed,privateThreads,privateMessages,privateSend,privateStories,boundedBytes,fail} from './unofficial.mjs';
+import {privateSearch,privateComments,privateAction,sessionCookies,probeSession,privateFeed,privateThreads,privateMessages,privateSend,privateStories,boundedBytes,fail} from './unofficial.mjs';
 import {randomBytes,createHash} from 'node:crypto';
 import {credentialVault} from '../../youtube-account.mjs';
 import {privateIdentity} from '../api/private-api.mjs';
@@ -45,29 +45,32 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
   return json({title:typeof result.title==='string'?result.title.slice(0,1000):'',author:match[1],thumbnail:typeof result.thumbnail_url==='string'&&result.thumbnail_url.startsWith('https://')?result.thumbnail_url:''});
  }
  const unofficialEnabled=env.SOCIAL_UNOFFICIAL_ENABLED==='true';
- if(!unofficialEnabled&&(route.startsWith('unofficial/')||['feed','stories','threads','messages','messages/send'].includes(route)))throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式接続は安全性と動作の検証が完了するまで利用できません。');
+ if(!unofficialEnabled&&(route.startsWith('unofficial/')||['feed','stories','threads','messages','messages/send','search','comments','likes','notes'].includes(route)))throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式接続は安全性と動作の検証が完了するまで利用できません。');
  if(route==='unofficial/connect'&&request.method==='POST'){
-  if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const raw=new TextDecoder().decode(await boundedBytes(request,32768));if(raw.length>20000)throw error(413,'PAYLOAD_TOO_LARGE','接続情報が大きすぎます。');let body;try{body=JSON.parse(raw);}catch{throw error(400,'FORMAT','接続情報の形式が無効です。');}if(body.consent!==true)throw error(400,'CONSENT','非公式接続の注意事項を確認してください。');const candidate={cookies:sessionCookies(body.cookies,service),deviceId:/^\d{10,25}$/.test(body.deviceId||'')?body.deviceId:'',region:'JP',userAgent:(request.headers.get('user-agent')||'XeroxYT social client').slice(0,300)};const verified=await probeSession(service,candidate,fetcher);await db.write(privateKey,{...candidate,...verified,connectedAt:Date.now()},Date.now()+30*86400000);return json({connected:true,user:verified.user,capabilities:verified.capabilities});
+  if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const raw=new TextDecoder().decode(await boundedBytes(request,32768));if(raw.length>20000)throw error(413,'PAYLOAD_TOO_LARGE','接続情報が大きすぎます。');let body;try{body=JSON.parse(raw);}catch{throw error(400,'FORMAT','接続情報の形式が無効です。');}if(body.consent!==true)throw error(400,'CONSENT','非公式接続の注意事項を確認してください。');const candidate={cookies:sessionCookies(body.cookies,service),deviceId:/^\d{10,25}$/.test(body.deviceId||'')?body.deviceId:'',region:'JP',uuid:crypto.randomUUID(),userAgent:(request.headers.get('user-agent')||'XeroxYT social client').slice(0,300)};const verified=await probeSession(service,candidate,fetcher);await db.write(privateKey,{...candidate,...verified,connectedAt:Date.now()},Date.now()+30*86400000);return json({connected:true,user:verified.user,capabilities:verified.capabilities});
  }
  if(route==='unofficial/disconnect'&&request.method==='POST'){await db.remove(privateKey);return json({success:true});}
- if(['feed','stories','threads','messages','messages/send'].includes(route)){
+ if(['feed','stories','threads','messages','messages/send','search','comments','likes','notes'].includes(route)){
   const cooldown=await db.read(`social-cooldown:${service}:${identity.id}`);if(cooldown?.until>Date.now())throw error(429,'SOCIAL_COOLDOWN','サービス側の制限を検出したため接続を停止しています。時間をおいて公式アプリで状態を確認してください。');
   if(!privateLink)throw error(401,'PRIVATE_SESSION_REQUIRED','ログイン済みアカウントのセッション連携が必要です。');
   const cursor=url.searchParams.get('cursor')||'';if(cursor.length>2000)throw error(400,'CURSOR','続きの情報が無効です。');
+  if(route==='search'&&request.method==='GET')return json(await privateSearch(service,privateLink,url.searchParams.get('q')||'',fetcher));
+  if(route==='comments'&&request.method==='GET')return json(await privateComments(service,privateLink,url.searchParams.get('mediaId')||'',cursor,fetcher));
   if(route==='feed'&&request.method==='GET')return json(await privateFeed(service,privateLink,cursor,fetcher));
   if(route==='stories'&&request.method==='GET')return json(await privateStories(service,privateLink,url.searchParams.get('id')||'',fetcher));
   if(route==='threads'&&request.method==='GET')return json({...await privateThreads(service,privateLink,cursor,fetcher),selfId:privateLink.user.id});
   if(route==='messages'&&request.method==='GET')return json({...await privateMessages(service,privateLink,{id:url.searchParams.get('thread')||'',shortId:url.searchParams.get('shortId')||'',type:Number(url.searchParams.get('type'))||1},cursor,fetcher),selfId:privateLink.user.id});
-  if(route==='messages/send'&&request.method==='POST'){
+  if(['messages/send','likes','comments','notes'].includes(route)&&request.method==='POST'){
    if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const raw=new TextDecoder().decode(await boundedBytes(request,32768));if(raw.length>12000)throw error(413,'PAYLOAD_TOO_LARGE','本文が長すぎます。');let body;try{body=JSON.parse(raw);}catch{throw error(400,'FORMAT','送信形式が無効です。');}
    if(!/^[-a-f0-9]{36}$/.test(body.clientId||''))throw error(400,'SEND_ID','送信IDが無効です。');
    await env.DB.prepare("DELETE FROM api_oauth_flows WHERE user_id LIKE 'social-send:%' AND expires_at<=?").bind(Date.now()).run();
    const nonce=`social-send:${service}:${identity.id}:${body.clientId}`;const claimed=await env.DB.prepare('INSERT INTO api_oauth_flows(user_id,data,expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO NOTHING RETURNING user_id').bind(nonce,JSON.stringify({pending:true}),Date.now()+86400000).first();if(!claimed)throw error(409,'SEND_UNCERTAIN','同じ送信の結果を確認中です。会話を更新し、送信済みか確認してください。');
+   if(route!=='messages/send')return json(await privateAction(service,privateLink,route,body,fetcher));
    const result=await privateSend(service,privateLink,{id:body.threadId,shortId:body.shortId,type:body.type||1},body.text,body.clientId,fetcher);return json({success:true,id:result.id});
   }
  }
- if(route==='status'&&request.method==='GET'&&privateLink&&unofficialEnabled)return json({service,configured:config.ready,connected:true,mode:'unofficial',user:privateLink.user,capabilities:{...privateLink.capabilities,ownMedia:!!link,publicEmbeds:true,platformActions:false},notice:'ログイン済みアカウントの非公式接続です。追加認証・機能制限・アカウント制限が発生する場合があります。'});
- if(route==='status'&&request.method==='GET')return json({service,configured:config.ready,connected:!!link,user:link?.user||null,expired:!!link&&link.expiresAt<=Date.now(),capabilities:{ownMedia:config.ready,publicEmbeds:true,homeFeed:false,forYou:false,stories:false,messaging:false,search:false,platformActions:false},notice:service==='instagram'?'公式連携はプロアカウントの自分の投稿が対象です。一般アカウントのホーム・DMは公式サイトで利用できます。':'公式連携は自分のプロフィールと公開投稿が対象です。For You・フォロー中・DMは公式サイトで利用できます。'});
+ if(route==='status'&&request.method==='GET'&&privateLink&&unofficialEnabled)return json({service,configured:config.ready,connected:true,mode:'unofficial',unofficialAvailable:true,user:privateLink.user,capabilities:{...privateLink.capabilities,ownMedia:!!link,publicEmbeds:true,platformActions:false},notice:'ログイン済みアカウントの非公式接続です。追加認証・機能制限・アカウント制限が発生する場合があります。'});
+ if(route==='status'&&request.method==='GET')return json({service,configured:config.ready,connected:!!link,unofficialAvailable:unofficialEnabled,user:link?.user||null,expired:!!link&&link.expiresAt<=Date.now(),capabilities:{ownMedia:config.ready,publicEmbeds:true,homeFeed:false,forYou:false,stories:false,messaging:false,search:false,platformActions:false},notice:service==='instagram'?'公式連携はプロアカウントの自分の投稿が対象です。一般アカウントのホーム・DMは公式サイトで利用できます。':'公式連携は自分のプロフィールと公開投稿が対象です。For You・フォロー中・DMは公式サイトで利用できます。'});
  if(route==='oauth/start'&&request.method==='POST'){
   if(!config.ready)throw error(503,'OAUTH_NOT_CONFIGURED','公式OAuthのキー・コールバックURL・審査設定が必要です。');
   await env.DB.prepare("DELETE FROM api_oauth_flows WHERE user_id LIKE 'social-state:%' AND expires_at<=?").bind(Date.now()).run();
@@ -75,6 +78,7 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
   const authorize=new URL(service==='tiktok'?'https://www.tiktok.com/v2/auth/authorize/':'https://www.instagram.com/oauth/authorize');authorize.search=new URLSearchParams({[service==='tiktok'?'client_key':'client_id']:config.key,redirect_uri:config.redirect,response_type:'code',scope:service==='tiktok'?'user.info.basic,video.list':'instagram_business_basic',state}).toString();return json({url:authorize.href});
  }
  if(route==='disconnect'&&request.method==='POST'){
+  await db.remove(privateKey);
   let providerRevoked=true;try{
   if(link&&service==='tiktok')await provider(fetcher,'https://open.tiktokapis.com/v2/oauth/revoke/',form({client_key:config.key,client_secret:config.secret,token:link.access_token}));
   if(link&&service==='instagram')await provider(fetcher,'https://graph.instagram.com/'+encodeURIComponent(link.user.id)+'/permissions',{method:'DELETE',headers:{Authorization:'Bearer '+link.access_token}});
