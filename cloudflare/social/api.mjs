@@ -1,3 +1,4 @@
+import {handlePublicSocial} from './public.mjs';
 import {browserLogin} from './browser-login.mjs';
 import {privateFollowing,privateSearch,privateComments,privateAction,sessionCookies,probeSession,privateFeed,privateThreads,privateMessages,privateSend,privateStories,boundedBytes,fail} from './unofficial.mjs';
 import {randomBytes,createHash} from 'node:crypto';
@@ -34,6 +35,7 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
   await db.write(`social-link:${service}:${flow.id}`,{...tokens,expiresAt:Date.now()+(Number(tokens.expires_in)||3600)*1000,user});return redirect('linked');
  }
  if(!origin||!allowed.includes(origin))throw error(403,'ORIGIN_FORBIDDEN','このサイトからの接続は許可されていません。');
+ if(route.startsWith('public/')){const guestId='public:'+createHash('sha256').update((env.API_SHARED_SECRET||'')+':'+(request.headers.get('CF-Connecting-IP')||'unknown')).digest('hex').slice(0,32);const limited=await privateRateLimit(env.DB,guestId,url.pathname,request.method);if(limited)return limited;return handlePublicSocial(request,env,service,route.slice(7),fetcher);}
  const identity=await privateIdentity(request,env);if(!identity)throw error(401,'SITE_SESSION_REQUIRED','サイトにログインしてください。');
  siteId=identity.id;
  const limited=await privateRateLimit(env.DB,identity.id,url.pathname,request.method);if(limited)return limited;
