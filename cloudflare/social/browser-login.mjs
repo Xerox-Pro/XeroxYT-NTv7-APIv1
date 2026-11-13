@@ -3,7 +3,7 @@ const LOGIN_URLS={instagram:'https://www.instagram.com/accounts/login/',tiktok:'
 export function cdpCommand(socket,method,params={}){return new Promise((resolve,reject)=>{const id=1;const done=()=>{clearTimeout(timer);socket.removeEventListener('message',receive);socket.removeEventListener('close',closed);};const closed=()=>{done();reject(fail('LOGIN_BROWSER_CLOSED','ログイン画面が閉じられました。もう一度開始してください。',409));};const receive=event=>{let data;try{data=JSON.parse(event.data);}catch{return;}if(data.id!==id)return;done();if(data.error)reject(fail('LOGIN_BROWSER_FAILED','ログイン画面との通信に失敗しました。',502));else resolve(data.result);};const timer=setTimeout(()=>{done();reject(fail('LOGIN_BROWSER_TIMEOUT','ログイン画面の応答がありません。',504));},10000);socket.addEventListener('message',receive);socket.addEventListener('close',closed);try{socket.send(JSON.stringify({id,method,params}));}catch{closed();}});}
 async function vercelBrowser(env,body){
  const response=await fetch('https://xeroxapp044.vercel.app/api/social-browser',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+env.API_SHARED_SECRET},body:JSON.stringify(body),redirect:'manual',signal:AbortSignal.timeout(body.operation==='create'?20000:15000)});
- if(response.status===409){const detail=await response.json().catch(()=>({}));if(['LOGIN_BUTTON_NOT_FOUND','LOGIN_FIELD_NOT_FOUND','LOGIN_INPUT'].includes(detail.error))throw fail(detail.error,detail.error==='LOGIN_BUTTON_NOT_FOUND'?'対応するボタンが見つからないか、まだ押せません。入力内容と現在の公式画面を確認してください。':detail.error==='LOGIN_FIELD_NOT_FOUND'?'対応する入力欄が見つかりません。公式画面でユーザー名・パスワードによるログイン、または認証コードの画面を開いてください。':'入力内容を確認してください。',409);}
+ if(response.status===409){const detail=await response.json().catch(()=>({}));if(['LOGIN_BUTTON_NOT_FOUND','LOGIN_FIELD_NOT_FOUND','LOGIN_INPUT'].includes(detail.error))throw fail(detail.error,detail.error==='LOGIN_BUTTON_NOT_FOUND'?'ログイン処理を進められません。入力内容を確認してやり直してください。':detail.error==='LOGIN_FIELD_NOT_FOUND'?'この認証画面にはまだ対応していません。公式アプリで本人確認を済ませてからやり直してください。':'入力内容を確認してください。',409);}
  if(!response.ok){console.warn(JSON.stringify({event:'browser_bridge_error',operation:body.operation,status:response.status}));throw Object.assign(fail('LOGIN_BROWSER_UNAVAILABLE','Vercelのログイン用ブラウザに接続できません。',503),{upstreamStatus:response.status});}
  return response.json();
 }
@@ -19,6 +19,21 @@ export async function browserLogin({route,service,request,env,db,identity,fetche
   let flow=old;if(!flow){let session;try{if(env.SOCIAL_BROWSER_PROVIDER==='vercel'){session=await vercelBrowser(env,{operation:'create',service});flow={...session,provider:'vercel',expiresAt:Date.now()+600000};}else{session=await env.BROWSER.acquire({keepAlive:600000,recording:false});const target=await env.BROWSER.devtools.newTarget(session.sessionId,LOGIN_URLS[service]);flow={sessionId:session.sessionId,targetId:target.id,expiresAt:Date.now()+600000};}await db.write(key,flow,flow.expiresAt);}catch(error){console.warn(JSON.stringify({event:'browser_create_error',name:error.name,code:error.code||null}));await close(session);throw Object.assign(fail('LOGIN_BROWSER_UNAVAILABLE','ログイン用ブラウザを開始できませんでした。利用上限またはブラウザの設定を確認してください。',503),{cause:error});}}
   if(flow.expiresAt<=Date.now())throw fail('LOGIN_EXPIRED','ログイン画面の期限が切れました。閉じてから再度開始してください。',409);
   await command(env,flow,'Emulation.setDeviceMetricsOverride',{width:390,height:780,deviceScaleFactor:1,mobile:false});return {ready:true,expiresAt:flow.expiresAt};
+ }
+ if(['login/credentials','login/verify','login/check'].includes(route)){
+  if(!old||old.expiresAt<=Date.now())throw fail('LOGIN_EXPIRED','ログインの期限が切れました。最初からやり直してください。',409);
+  if(old.provider!=='vercel')throw fail('LOGIN_RESTART','ログインを中止して、もう一度お試しください。',409);
+  const body=await request.json();let result;
+  if(route==='login/credentials'){
+   if(typeof body.username!=='string'||!body.username.trim()||body.username.length>300||typeof body.password!=='string'||!body.password||body.password.length>500)throw fail('LOGIN_INPUT','ユーザーIDとパスワードを入力してください。',400);
+   result=await command(env,old,'Xerox.submitCredentials',{service,username:body.username,password:body.password});
+  }else if(route==='login/verify'){
+   if(typeof body.code!=='string'||!body.code.trim()||body.code.length>32)throw fail('LOGIN_INPUT','認証コードを入力してください。',400);
+   result=await command(env,old,'Xerox.submitVerification',{service,code:body.code});
+  }else result=await command(env,old,'Xerox.inspectLogin',{service});
+  if(result.state==='authenticated')return {state:'authenticated',message:'認証を確認しました。接続情報を保存しています。'};
+  const messages={code_required:'SMS・メール・認証アプリに届いた認証コードを入力してください。',captcha_required:'画像認証が必要なため、このログイン方式では続行できません。公式アプリで本人確認してからやり直してください。',approval_required:'公式アプリに届いたログイン通知を承認し、「ログイン状態を確認」を押してください。',invalid_credentials:'ユーザーID・パスワード、または認証コードが正しくありません。',pending:'ログイン結果を確認しています。',unsupported:'このログイン画面には対応していません。公式アプリでログイン方法を確認してください。'};
+  return {state:Object.hasOwn(messages,result.state)?result.state:'unsupported',message:messages[result.state]||messages.unsupported};
  }
  if(!['login/finish','login/view','login/input'].includes(route))throw fail('LOGIN_ROUTE','未対応の操作です。',404);
  if(!old||old.expiresAt<=Date.now())throw fail('LOGIN_EXPIRED','ログイン画面の期限が切れました。もう一度開始してください。',409);
