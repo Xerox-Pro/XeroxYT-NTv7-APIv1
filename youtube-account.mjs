@@ -1,3 +1,4 @@
+import {upstreamFailure,notificationItems} from './youtube-upstream.mjs';
 import {readShortsSequence} from './youtube-shorts-sequence.mjs';
 import {readYouTubeMix} from './youtube-mix.mjs';
 import {readYouTubeProfile} from './youtube-profile.mjs';
@@ -6,6 +7,7 @@ import {createHash,randomBytes,randomUUID,createCipheriv,createDecipheriv} from 
 import {collectShorts} from './shorts.mjs';
 const publicMessages=new Set(["Googleアカウントを連携してください。", "Google認証コードを取得できませんでした。", "YouTubeからショートの開始動画を取得できませんでした。再試行してください。", "YouTubeから次のショートを取得できませんでした。再試行してください。", "YouTubeが一覧の取得を拒否しました。", "YouTubeのショート取得に失敗しました。再試行してください。", "YouTubeの認証確認に一時的に失敗しました。連携は保持しています。再試行してください。", "YouTubeの連携状態が変わりました。開き直してください。", "YouTube連携が無効になりました。再連携してください。", "YouTube連携のサーバー設定が不足しています。", "このミックスリストを読み込めませんでした。時間をおいて再試行してください。", "コメントが無効です。", "ショートの続きの情報が無効です。開き直してください。", "ショート動画IDが無効です。", "チャンネルIDが無効です。", "ミックスリストIDが無効です。", "ミックスリストに再生できる動画がありません。", "ミックスリストの続きの情報が無効です。", "ログインが必要です。", "不明なフィードです。", "再生リストIDが無効です。", "再生リスト名が無効です。", "動画IDが無効です。", "動画一覧が無効です。", "未対応の操作です。", "続きの情報が無効です。", "続きの情報が無効です。ページを開き直してください。", "認証コードが期限切れです。もう一度連携してください。", "連携状態が変わりました。"]);
 export function youtubePublicError(error){
+ const upstream=upstreamFailure(error);if(upstream)return upstream;
  const known=publicMessages.has(error?.message);
  const status=Number.isInteger(error?.status)&&error.status>=400&&error.status<=599?error.status:502;
  const code=known&&['YOUTUBE_NOT_LINKED','YOUTUBE_REAUTH_REQUIRED','YOUTUBE_AUTH_TEMPORARY','YOUTUBE_FEED_REJECTED','YOUTUBE_SHORTS_SEED_UNAVAILABLE','YOUTUBE_SHORTS_SEQUENCE_REJECTED','YOUTUBE_SHORTS_SEQUENCE_EMPTY'].includes(error?.code)?error.code:'YOUTUBE_REQUEST_FAILED';
@@ -18,7 +20,8 @@ export function credentialVault(secret){
  return {seal(value,user){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);cipher.setAAD(Buffer.from(user));const data=Buffer.concat([cipher.update(Buffer.from(JSON.stringify(value),'utf8')),cipher.final()]);return {iv:iv.toString('base64'),data:data.toString('base64'),tag:cipher.getAuthTag().toString('base64')};},open(value,user){const cipher=createDecipheriv('aes-256-gcm',key,Buffer.from(value.iv,'base64'));cipher.setAAD(Buffer.from(user));cipher.setAuthTag(Buffer.from(value.tag,'base64'));return JSON.parse(Buffer.concat([cipher.update(Buffer.from(value.data,'base64')),cipher.final()]).toString());}};
 }
 const text=value=>typeof value==='string'?value:value?.text||value?.toString?.()||'';
-export function registerYouTubeAccount(app,{store,secret,createClient,createPublicClient,formatVideo,formatChannel,Search,ContinuationItem,Feed,fetcher=fetch}){
+export function registerYouTubeAccount(app,{store,secret,createClient,createPublicClient,formatVideo,formatChannel,Search,ContinuationItem,Feed,fetcher=fetch,feedOptions={}}){
+ const readFeed=(yt,kind,cursor='')=>readYouTubeFeed(yt,kind,cursor,feedOptions);
  let vault;const getVault=()=>vault||(vault=credentialVault(secret));
  const read=async id=>{const row=await store.get('youtube:'+id);return row&&row.expires>Date.now()?getVault().open(row.flow,id):null;};
  const save=async(id,value)=>store.set('youtube:'+id,{flow:getVault().seal(value,id),expires:Date.now()+lifetime});
@@ -32,6 +35,7 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
  const sendError=(res,error)=>{
   const safe=youtubePublicError(error);
   console.warn(JSON.stringify({event:'youtube_account_error',code:safe.code,status:safe.status}));
+  if(safe.retryAfter)res.setHeader('Retry-After',String(safe.retryAfter));
   return res.status(safe.status).json({error:safe.error,code:safe.code});
  };
  const route=(method,path,work)=>app[method](path,async(req,res)=>{res.setHeader('Cache-Control','private, no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');try{if(typeof res.locals.siteAccountId!=='string'||!res.locals.siteAccountId)throw Object.assign(new Error('ログインが必要です。'),{status:401});const result=await work(req,res,res.locals.siteAccountId);if(!res.headersSent)res.json(result);}catch(error){sendError(res,error);}});
@@ -62,16 +66,16 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
  route('post','/api/auth/cancel',async(req,res,id)=>{await store.delete('youtube-flow:'+id);return {success:true};});
  route('post','/api/auth/logout',async(req,res,id)=>{await store.delete('youtube:'+id);await store.delete('youtube-flow:'+id);return {success:true};});
  route('get','/api/user/feed/:kind',async(req,res,id)=>run(id,async yt=>{
-  const kind=req.params.kind,result=await readYouTubeFeed(yt,kind,String(req.query.continuation||''));
+  const kind=req.params.kind,result=await readFeed(yt,kind,String(req.query.continuation||''));
   return {...result,videos:kind==='shorts'?result.videos.filter(v=>v.isShort):kind==='home'?[...result.videos,...result.playlists]:result.videos,...(kind==='shorts'?{sourceDescription:'GoogleアカウントのホームにあるShorts'}:{})};
  }));
  route('get','/api/user/shorts-sequence',async(req,res,id)=>run(id,yt=>readShortsSequence(yt,String(req.query.videoId||''),String(req.query.continuation||''))));
  route('get','/api/user/mix/:id',async(req,res,id)=>run(id,yt=>readYouTubeMix(yt,req.params.id,String(req.query.videoId||''),String(req.query.continuation||''))));
  route('get','/api/user/playlist/:id',async(req,res,id)=>run(id,async yt=>{
   if(!/^[\w-]{2,150}$/.test(req.params.id))throw Object.assign(new Error('再生リストIDが無効です。'),{status:400});
-  const result=await readYouTubeFeed(yt,'playlist:'+req.params.id,String(req.query.continuation||''));return {...result,id:req.params.id,title:'YouTubeの再生リスト'};
+  const result=await readFeed(yt,'playlist:'+req.params.id,String(req.query.continuation||''));return {...result,id:req.params.id,title:'YouTubeの再生リスト'};
  }));
- const reads={history:async yt=>(await readYouTubeFeed(yt,'history')).videos,'liked-videos':async yt=>(await readYouTubeFeed(yt,'liked')).videos,'watch-later':async yt=>(await readYouTubeFeed(yt,'watch-later')).videos,playlists:async yt=>(await readYouTubeFeed(yt,'playlists')).playlists,subscriptions:async yt=>(await readYouTubeFeed(yt,'channels')).channels,'channel-info':async(yt,session)=>{const user=await readYouTubeProfile(yt,createPublicClient);const current=await read(session.siteId);if(current?.credentials?.refresh_token!==session.credentials.refresh_token)throw Object.assign(new Error('連携状態が変わりました。'),{status:409});await save(session.siteId,{credentials:yt.session.oauth.oauth2_tokens||session.credentials,user});return user;},'notifications/unread-count':async yt=>({count:await yt.getUnseenNotificationsCount()}),notifications:async yt=>(await yt.getNotifications()).contents.map(n=>({id:n.notification_id,message:text(n.short_message),sentTime:text(n.sent_time),read:!!n.read,avatar:n.thumbnails?.[0]?.url||'',thumbnail:n.video_thumbnails?.[0]?.url||'',videoId:n.endpoint?.payload?.videoId||''}))};
+ const reads={history:async yt=>(await readFeed(yt,'history')).videos,'liked-videos':async yt=>(await readFeed(yt,'liked')).videos,'watch-later':async yt=>(await readFeed(yt,'watch-later')).videos,playlists:async yt=>(await readFeed(yt,'playlists')).playlists,subscriptions:async yt=>(await readFeed(yt,'channels')).channels,'channel-info':async(yt,session)=>{const user=await readYouTubeProfile(yt,createPublicClient);const current=await read(session.siteId);if(current?.credentials?.refresh_token!==session.credentials.refresh_token)throw Object.assign(new Error('連携状態が変わりました。'),{status:409});await save(session.siteId,{credentials:yt.session.oauth.oauth2_tokens||session.credentials,user});return user;},'notifications/unread-count':async yt=>({count:await yt.getUnseenNotificationsCount()}),notifications:async yt=>notificationItems((await yt.actions.execute('/notification/get_notification_menu',{client:'TV',parse:false,notificationsMenuRequestType:'NOTIFICATIONS_MENU_REQUEST_TYPE_INBOX'})).data)};
  for(const [path,work]of Object.entries(reads))route('get','/api/user/'+path,async(req,res,id)=>run(id,work));
  route('post','/api/user/action',async(req,res,id)=>{
   const {action,videoId,channelId,text:comment,playlistId,title,videoIds}=req.body||{};

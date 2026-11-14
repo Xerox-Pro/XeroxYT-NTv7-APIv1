@@ -1,3 +1,4 @@
+import {upstreamFailure,homeCategoryItems} from "./youtube-upstream.mjs";
 import {optimizePublicVideoReads} from "./public-video-reads.mjs";
 import {createCommentPages,readCommentPage} from "./comment-pages.mjs";
 import {playlistCard,readYouTubeMix} from "./youtube-mix.mjs";
@@ -59,6 +60,8 @@ async function getYt() {
           location: "JP",
           lang: "ja",
           retrieve_player: false,
+          generate_session_locally: true,
+          retrieve_innertube_config: false,
         });
         
         yt = optimizePublicVideoReads(instance);
@@ -880,7 +883,7 @@ async function startServer() {
 
   registerYouTubeAccount(app, {
     store: authFlows, secret: process.env.API_SHARED_SECRET, createPublicClient: getYt,
-    createClient: () => { Log.setLevel(Log.Level.NONE); return Innertube.create({ client_type: ClientType.TV, location: "JP", lang: "ja", retrieve_player: false, cache: new UniversalCache(false) }); },
+    createClient: () => { Log.setLevel(Log.Level.NONE); return Innertube.create({ client_type: ClientType.TV, generate_session_locally: true, retrieve_innertube_config: false, location: "JP", lang: "ja", retrieve_player: false, cache: new UniversalCache(false) }); },
     formatVideo: formatVideoObject, formatChannel: formatSearchChannel,
     Search: YT.Search, Feed: Mixins.Feed, ContinuationItem: YTNodes.ContinuationItem,
   });
@@ -1520,14 +1523,13 @@ async function startServer() {
   app.get("/api/home/categories", async (req, res) => {
     try {
       const youtube = await getYt();
-      const feed = await youtube.getHomeFeed();
-      const categories = (feed.filters || []).filter((name: string) =>
-        name && name !== "すべて" && name.toLowerCase() !== "all"
-      );
+      const response = await youtube.actions.execute('/browse',{browseId:'FEwhat_to_watch',parse:false});
+      const categories = homeCategoryItems(response.data);
       res.setHeader("Cache-Control", "private, no-store");
       return res.json({ categories });
     } catch (error: any) {
-      console.error("[Home categories]", error?.message || error);
+      const failure=upstreamFailure(error);
+      if(failure){res.setHeader('Retry-After',String(failure.retryAfter));return res.status(failure.status).json(failure);}
       return res.status(502).json({ error: "ホームのカテゴリを取得できませんでした。" });
     }
   });
@@ -1937,9 +1939,10 @@ async function startServer() {
         seed: seed,
       });
     } catch (err) {
-      console.error("[Recs] Recommendations API error:", err);
-      res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=86400");
-      return res.json({ videos: [], aiKeywords: [], seed: seed });
+      const failure=upstreamFailure(err);
+      res.setHeader('Cache-Control','no-store');
+      if(failure){res.setHeader('Retry-After',String(failure.retryAfter));return res.status(failure.status).json(failure);}
+      return res.status(502).json({error:'おすすめの取得に失敗しました。再試行してください。',code:'YOUTUBE_RECOMMENDATIONS_FAILED'});
     }
   });
 

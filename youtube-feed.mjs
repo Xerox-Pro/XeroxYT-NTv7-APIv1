@@ -52,15 +52,16 @@ export function decodeYouTubeFeed(data) {
  walk(data);return {videos:[...videos.values()],playlists:[...playlists.values()],channels:[...channels.values()],tokens};
 }
 const browseIds={home:'FEwhat_to_watch',shorts:'FEwhat_to_watch',history:'FEhistory',subscriptions:'FEsubscriptions',channels:'FEchannels',liked:'VLLL','watch-later':'VLWL',playlists:'FEplaylist_aggregation'};
-export async function readYouTubeFeed(yt,kind,cursor='') {
+export async function readYouTubeFeed(yt,kind,cursor='',options={}) {
  if(typeof cursor!=='string'||cursor.length>60000)throw Object.assign(new Error('続きの情報が無効です。'),{status:400});
  let queue=[];
  if(cursor){try{const parsed=JSON.parse(Buffer.from(cursor,'base64url').toString());if(parsed.kind!==kind||!Array.isArray(parsed.tokens)||parsed.tokens.length>30||parsed.tokens.some(t=>typeof t!=='string'||!t||t.length>16000))throw Error();queue=parsed.tokens;}catch{throw Object.assign(new Error('続きの情報が無効です。ページを開き直してください。'),{status:400});}}
  const browseId=browseIds[kind]||(kind.startsWith('playlist:')?'VL'+kind.slice(9).replace(/^VL/,''):null);
  if(!browseId)throw Object.assign(new Error('不明なフィードです。'),{status:400});
+ const budget=Number.isInteger(options.maxRequests)?Math.max(1,Math.min(8,options.maxRequests)):(kind==='shorts'?8:6);
  const result={videos:[],playlists:[],channels:[]};const visited=new Set();let requests=0;const start=Date.now();
  const uniqueVideos=()=>new Set(result.videos.filter(v=>kind!=='shorts'||v.isShort).map(v=>v.videoId)).size;
- const hasItems=()=>kind==='playlists'?result.playlists.length>=24:kind==='channels'?result.channels.length>=24:uniqueVideos()>=(kind==='shorts'?24:36);
+ const hasItems=()=>options.firstPageOnly&&!['home','shorts'].includes(kind)&&(result.videos.length||result.playlists.length||result.channels.length)?true:kind==='playlists'?result.playlists.length>=24:kind==='channels'?result.channels.length>=24:uniqueVideos()>=(kind==='shorts'?24:36);
  do {
   const token=queue.shift();if(token&&visited.has(token))continue;if(token)visited.add(token);
   let response;try{response=await yt.actions.execute('/browse',{...(token?{continuation:token}:{browseId}),client:'TV'});}catch(error){if(!token||!(result.videos.length||result.playlists.length||result.channels.length))throw error;queue.unshift(token);break;}requests++;
@@ -70,7 +71,7 @@ export async function readYouTubeFeed(yt,kind,cursor='') {
   queue.push(...page.tokens.filter(t=>!visited.has(t)&&!queue.includes(t)));queue=queue.slice(0,30);
   // TV shelves may start with continuation-only placeholders. Hydrate these
   // before returning an empty page, with bounded request count and latency.
- }while(queue.length&&requests<(kind==='shorts'?8:6)&&Date.now()-start<6500&&!hasItems());
+ }while(queue.length&&requests<budget&&Date.now()-start<6500&&!hasItems());
  for(const key of ['videos','playlists','channels'])result[key]=[...new Map(result[key].map(item=>[item.videoId||item.id,item])).values()];
  while(queue.length&&Buffer.byteLength(JSON.stringify({kind,tokens:queue}))>42000)queue.pop();
  const continuation=queue.length?Buffer.from(JSON.stringify({kind,tokens:queue})).toString('base64url'):'';

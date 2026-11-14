@@ -1,3 +1,4 @@
+import {upstreamFailure} from './youtube-upstream.mjs';
 import {normalizeSearchFilters,encodeSearchFilters} from './search-filters.mjs';
 export function registerFilteredSearch(app,{getYt,formatVideoObject,formatSearchChannel,Search,ContinuationItem}){
  const sessions=new Map();
@@ -34,6 +35,6 @@ export function registerFilteredSearch(app,{getYt,formatVideoObject,formatSearch
    return current.pages.get(page)||{videos:[],channels:[],hasMore:false,filters};
   };
   const task=current.chain.then(work);current.chain=task.catch(()=>{});
-  try{res.setHeader('Cache-Control','private, no-store');res.json(await task);}catch(error){if(!current.feed)sessions.delete(key);console.warn('[Search]',error?.message);res.status(502).json({error:'検索結果を取得できませんでした。再試行してください。'});}
+  try{res.setHeader('Cache-Control','private, no-store');res.json(await task);}catch(error){if(!current.feed)sessions.delete(key);const failure=upstreamFailure(error);if(failure){res.setHeader('Retry-After',String(failure.retryAfter));res.status(failure.status).json(failure);}else res.status(502).json({error:'検索結果を取得できませんでした。再試行してください。'});}
  });
 }
