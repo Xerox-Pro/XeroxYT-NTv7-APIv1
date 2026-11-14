@@ -1,7 +1,7 @@
 import {boundedBytes} from '../security/http.mjs';
 import {privateRateLimit} from './private-rate-limit.mjs';
 import {createHmac,timingSafeEqual,createHash} from 'node:crypto';
-import {Innertube,ClientType,Log} from 'youtubei.js/cf-worker';
+import {Innertube,ClientType,Log,Constants} from 'youtubei.js/cf-worker';
 import {registerYouTubeAccount} from '../../youtube-account.mjs';
 const privatePath=path=>/^\/api\/(auth|user)(\/|$)/.test(path);
 export {privatePath};
@@ -28,7 +28,7 @@ export function createPrivateRouter(register=registerYouTubeAccount){
  const limited=await privateRateLimit(env.DB,identity.id,url.pathname,request.method);if(limited)return limited;
  const app=Object.fromEntries(['get','post'].map(method=>[method,(path,handler)=>routes.push({method:method.toUpperCase(),parts:path.split('/'),handler})]));
  const store={async get(key){const row=await env.DB.prepare('SELECT data FROM api_oauth_flows WHERE user_id=? AND expires_at>?').bind(key,Date.now()).first();return row?JSON.parse(row.data):undefined;},async set(key,value){await env.DB.prepare('INSERT INTO api_oauth_flows(user_id,data,expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,expires_at=excluded.expires_at').bind(key,JSON.stringify(value),value.expires).run();},async delete(key){await env.DB.prepare('DELETE FROM api_oauth_flows WHERE user_id=?').bind(key).run();}};
- const createClient=()=>{Log.setLevel(Log.Level.NONE);return Innertube.create({client_type:ClientType.TV,location:'JP',lang:'ja',retrieve_player:false,generate_session_locally:true,retrieve_innertube_config:false,cache:{get:async()=>undefined,set:async()=>{},remove:async()=>{}}});};
+ const createClient=()=>{Log.setLevel(Log.Level.NONE);return Innertube.create({client_type:ClientType.TV,user_agent:Constants.CLIENTS.TV.USER_AGENT,location:'JP',lang:'ja',retrieve_player:false,generate_session_locally:true,retrieve_innertube_config:false,cache:{get:async()=>undefined,set:async()=>{},remove:async()=>{}}});};
  register(app,{store,feedOptions:{maxRequests:2,firstPageOnly:true},secret:env.API_SHARED_SECRET,createClient,createPublicClient:()=>Innertube.create({location:'JP',lang:'ja',retrieve_player:false,generate_session_locally:true,retrieve_innertube_config:false,cache:{get:async()=>undefined,set:async()=>{},remove:async()=>{}}})});
  const parts=url.pathname.split('/');
  for(const route of routes){if(route.method!==request.method||route.parts.length!==parts.length)continue;const params={};if(!route.parts.every((p,i)=>p.startsWith(':')?(params[p.slice(1)]=decodeURIComponent(parts[i]),true):p===parts[i]))continue;

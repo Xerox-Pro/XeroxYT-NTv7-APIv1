@@ -10,7 +10,7 @@ import { registerShortsRoutes, normalizeShort } from "./shorts.mjs";
 import { registerRankingRoute } from "./shorts-ranking.mjs";
 import path from "path";
 import crypto from "crypto";
-import { Innertube, UniversalCache, YT, YTNodes, ClientType, Mixins, Log } from "youtubei.js";
+import { Innertube, UniversalCache, YT, YTNodes, ClientType, Mixins, Log, Constants } from "youtubei.js";
 import axios from "axios";
 
 // Suppress noisy youtubei.js internal logs
@@ -883,7 +883,7 @@ async function startServer() {
 
   registerYouTubeAccount(app, {
     store: authFlows, secret: process.env.API_SHARED_SECRET, createPublicClient: getYt,
-    createClient: () => { Log.setLevel(Log.Level.NONE); return Innertube.create({ client_type: ClientType.TV, generate_session_locally: true, retrieve_innertube_config: false, location: "JP", lang: "ja", retrieve_player: false, cache: new UniversalCache(false) }); },
+    createClient: () => { Log.setLevel(Log.Level.NONE); return Innertube.create({ client_type: ClientType.TV, user_agent: Constants.CLIENTS.TV.USER_AGENT, generate_session_locally: true, retrieve_innertube_config: false, location: "JP", lang: "ja", retrieve_player: false, cache: new UniversalCache(false) }); },
     formatVideo: formatVideoObject, formatChannel: formatSearchChannel,
     Search: YT.Search, Feed: Mixins.Feed, ContinuationItem: YTNodes.ContinuationItem,
   });

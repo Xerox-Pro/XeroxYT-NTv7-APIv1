@@ -25,13 +25,27 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
  let vault;const getVault=()=>vault||(vault=credentialVault(secret));
  const read=async id=>{const row=await store.get('youtube:'+id);return row&&row.expires>Date.now()?getVault().open(row.flow,id):null;};
  const save=async(id,value)=>store.set('youtube:'+id,{flow:getVault().seal(value,id),expires:Date.now()+lifetime});
- const run=async(id,work)=>{
+ const run=async(id,work,{retryRead=false}={})=>{
   const session=await read(id);if(!session)throw Object.assign(new Error('Googleアカウントを連携してください。'),{status:401,code:'YOUTUBE_NOT_LINKED'});
   const yt=await createClient();let saved=JSON.stringify(session.credentials);
   const persist=async()=>{const credentials=yt.session.oauth.oauth2_tokens;if(!credentials||JSON.stringify(credentials)===saved)return;const current=await read(id);if(current?.credentials?.refresh_token!==session.credentials.refresh_token)throw Object.assign(new Error('YouTubeの連携状態が変わりました。開き直してください。'),{status:409});await save(id,{...session,credentials});saved=JSON.stringify(credentials);};
   try{await yt.session.signIn(session.credentials);}catch(error){const permanent=/Invalid tokens provided|Failed to refresh access token: (400|401)\b/.test(error.message||'');throw Object.assign(new Error(permanent?'YouTube連携が無効になりました。再連携してください。':'YouTubeの認証確認に一時的に失敗しました。連携は保持しています。再試行してください。'),{status:permanent?401:503,code:permanent?'YOUTUBE_REAUTH_REQUIRED':'YOUTUBE_AUTH_TEMPORARY'});}
-  await persist();try{return await work(yt,{...session,siteId:id});}finally{await persist();}
+  await persist();try{
+   try{return await work(yt,{...session,siteId:id});}
+   catch(error){
+    const status=Number(error?.status||error?.statusCode||/status code (\d{3})/.exec(error?.message||'')?.[1]);
+    if(!retryRead||![401,403].includes(status)||typeof yt.session.oauth.refreshAccessToken!=='function')throw error;
+    // Refresh the same account exactly once. Never retry user mutations.
+    try{await yt.session.oauth.refreshAccessToken();}catch(refreshError){
+     const permanent=/Failed to refresh access token: (400|401)\b/.test(refreshError.message||'');
+     throw Object.assign(new Error(permanent?'YouTube連携が無効になりました。再連携してください。':'YouTubeの認証確認に一時的に失敗しました。連携は保持しています。再試行してください。'),{status:permanent?401:503,code:permanent?'YOUTUBE_REAUTH_REQUIRED':'YOUTUBE_AUTH_TEMPORARY'});
+    }
+    await persist();
+    return await work(yt,{...session,credentials:yt.session.oauth.oauth2_tokens,siteId:id});
+   }
+  }finally{await persist();}
  };
+ const readRun=(id,work)=>run(id,work,{retryRead:true});
  const sendError=(res,error)=>{
   const safe=youtubePublicError(error);
   console.warn(JSON.stringify({event:'youtube_account_error',code:safe.code,status:safe.status}));
@@ -65,18 +79,18 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
  });
  route('post','/api/auth/cancel',async(req,res,id)=>{await store.delete('youtube-flow:'+id);return {success:true};});
  route('post','/api/auth/logout',async(req,res,id)=>{await store.delete('youtube:'+id);await store.delete('youtube-flow:'+id);return {success:true};});
- route('get','/api/user/feed/:kind',async(req,res,id)=>run(id,async yt=>{
+ route('get','/api/user/feed/:kind',async(req,res,id)=>readRun(id,async yt=>{
   const kind=req.params.kind,result=await readFeed(yt,kind,String(req.query.continuation||''));
   return {...result,videos:kind==='shorts'?result.videos.filter(v=>v.isShort):kind==='home'?[...result.videos,...result.playlists]:result.videos,...(kind==='shorts'?{sourceDescription:'GoogleアカウントのホームにあるShorts'}:{})};
  }));
- route('get','/api/user/shorts-sequence',async(req,res,id)=>run(id,yt=>readShortsSequence(yt,String(req.query.videoId||''),String(req.query.continuation||''))));
- route('get','/api/user/mix/:id',async(req,res,id)=>run(id,yt=>readYouTubeMix(yt,req.params.id,String(req.query.videoId||''),String(req.query.continuation||''))));
- route('get','/api/user/playlist/:id',async(req,res,id)=>run(id,async yt=>{
+ route('get','/api/user/shorts-sequence',async(req,res,id)=>readRun(id,yt=>readShortsSequence(yt,String(req.query.videoId||''),String(req.query.continuation||''))));
+ route('get','/api/user/mix/:id',async(req,res,id)=>readRun(id,yt=>readYouTubeMix(yt,req.params.id,String(req.query.videoId||''),String(req.query.continuation||''))));
+ route('get','/api/user/playlist/:id',async(req,res,id)=>readRun(id,async yt=>{
   if(!/^[\w-]{2,150}$/.test(req.params.id))throw Object.assign(new Error('再生リストIDが無効です。'),{status:400});
   const result=await readFeed(yt,'playlist:'+req.params.id,String(req.query.continuation||''));return {...result,id:req.params.id,title:'YouTubeの再生リスト'};
  }));
  const reads={history:async yt=>(await readFeed(yt,'history')).videos,'liked-videos':async yt=>(await readFeed(yt,'liked')).videos,'watch-later':async yt=>(await readFeed(yt,'watch-later')).videos,playlists:async yt=>(await readFeed(yt,'playlists')).playlists,subscriptions:async yt=>(await readFeed(yt,'channels')).channels,'channel-info':async(yt,session)=>{const user=await readYouTubeProfile(yt,createPublicClient);const current=await read(session.siteId);if(current?.credentials?.refresh_token!==session.credentials.refresh_token)throw Object.assign(new Error('連携状態が変わりました。'),{status:409});await save(session.siteId,{credentials:yt.session.oauth.oauth2_tokens||session.credentials,user});return user;},'notifications/unread-count':async yt=>({count:await yt.getUnseenNotificationsCount()}),notifications:async yt=>notificationItems((await yt.actions.execute('/notification/get_notification_menu',{client:'TV',parse:false,notificationsMenuRequestType:'NOTIFICATIONS_MENU_REQUEST_TYPE_INBOX'})).data)};
- for(const [path,work]of Object.entries(reads))route('get','/api/user/'+path,async(req,res,id)=>run(id,work));
+ for(const [path,work]of Object.entries(reads))route('get','/api/user/'+path,async(req,res,id)=>readRun(id,work));
  route('post','/api/user/action',async(req,res,id)=>{
   const {action,videoId,channelId,text:comment,playlistId,title,videoIds}=req.body||{};
   const video=()=>{if(!/^[\w-]{11}$/.test(videoId||''))throw Object.assign(new Error('動画IDが無効です。'),{status:400});return videoId;};
