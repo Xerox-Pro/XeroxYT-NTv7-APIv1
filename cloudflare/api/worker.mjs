@@ -1,5 +1,6 @@
 import {secureApiResponse} from '../security/http.mjs';
 import {frontendRequest} from './frontend.mjs';
+import {withGasKey} from './gas-key.mjs';
 import {handleSocialApi,socialCallback} from '../social/api.mjs';
 import {privatePath,handlePrivateApi,issuePrivateTicket} from './private-api.mjs';
 import {authorizeSource} from '../../access-policy.mjs';
@@ -30,4 +31,4 @@ async function handleRequest(request,env,ctx){
  }catch(error){console.warn(JSON.stringify({event:'api_proxy_error',name:error.name||'Error',reason:/[\w.$]+ is not a function/.exec(error.message)?.[0]||(/I\/O/.test(error.message)?'request_context':'other'),frames:String(error.stack||'').split('\n').slice(1,3)}));response=Response.json({error:'サーバーとの通信に失敗しました。再試行してください。',code:'API_UPSTREAM_FAILED'},{status:502});}
  const headers=new Headers(response.headers);for(const[k,v]of Object.entries(cors))headers.set(k,v);headers.set('X-XeroxYT-Proxy','cloudflare');return new Response(response.body,{status:response.status,headers});
 }
-export default {async fetch(request,env,ctx){const frontend=frontendRequest(request,env);if(frontend?.response)return frontend.response;const response=await handleRequest(frontend?.request||request,frontend?.env||env,ctx);return /^\/(api|internal)(\/|$)|^\/health$/.test(new URL(request.url).pathname)?secureApiResponse(response):response;}};
+export default withGasKey({async fetch(request,env,ctx){const frontend=frontendRequest(request,env);if(frontend?.response)return frontend.response;const response=await handleRequest(frontend?.request||request,frontend?.env||env,ctx);return /^\/(api|internal)(\/|$)|^\/health$/.test(new URL(request.url).pathname)?secureApiResponse(response):response;}});
