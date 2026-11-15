@@ -1,6 +1,15 @@
 import test from 'node:test';import assert from 'node:assert/strict';import express from 'express';
 import {registerYouTubeAccount,credentialVault} from '../youtube-account.mjs';
 const secret='test-only-server-secret-0123456789';
+test('personal feed POST reads a long continuation from the body using the same account credentials',async()=>{
+ const token='t'.repeat(14000),cursor=Buffer.from(JSON.stringify({kind:'home',tokens:[token],visitorData:'same-visitor'})).toString('base64url'),credentials={access_token:'test-access',refresh_token:'test-refresh'};
+ const row={flow:credentialVault(secret).seal({credentials,user:{name:'Alice'}},'alice'),expires:Date.now()+60000};let result,status=200;
+ const routes=new Map(),app=Object.fromEntries(['get','post'].map(method=>[method,(path,handler)=>routes.set(method+' '+path,handler)]));
+ const yt={session:{context:{client:{visitorData:'new-visitor'}},oauth:{},signIn:async value=>assert.deepEqual(value,credentials)},actions:{execute:async(path,args)=>{assert.equal(args.continuation,token);assert.equal(yt.session.context.client.visitorData,'same-visitor');return {data:{contents:[{videoRenderer:{videoId:'abcdefghijk',title:{simpleText:'Account continuation'}}}]}};}}};
+ registerYouTubeAccount(app,{secret,store:{get:async key=>key==='youtube:alice'?row:null},createClient:async()=>yt});
+ await routes.get('post /api/user/feed/:kind')({params:{kind:'home'},body:{continuation:cursor}},{locals:{siteAccountId:'alice'},setHeader(){},status(s){status=s;return this;},json(value){result=value;}});
+ assert.ok(cursor.length>12000);assert.equal(status,200);assert.equal(result.videos[0].title,'Account continuation');assert.equal(result.personalized,true);assert.ok(!JSON.stringify(result).includes('test-access'));
+});
 test('Google credentials are authenticated-encrypted and cannot be read under another site account',()=>{
  const vault=credentialVault(secret),sealed=vault.seal({refresh_token:'private-token'},'alice');assert.ok(!JSON.stringify(sealed).includes('private-token'));assert.equal(vault.open(sealed,'alice').refresh_token,'private-token');assert.throws(()=>vault.open(sealed,'bob'));const modified={...sealed,tag:Buffer.alloc(16).toString('base64')};assert.throws(()=>vault.open(modified,'alice'));assert.throws(()=>credentialVault('short'));
 });

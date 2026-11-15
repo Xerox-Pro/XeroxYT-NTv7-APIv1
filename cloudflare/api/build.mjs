@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import { build } from 'esbuild';
-let source = await fs.readFile('server.ts', 'utf8');
+let source = (await fs.readFile('server.ts', 'utf8')).replace(/\r\n/g, '\n');
 const imports = [];
 source = source.replace(/^import .*?;\n/gm, value => { imports.push(value); return ''; });
 source = source.slice(source.indexOf('let yt:'));
