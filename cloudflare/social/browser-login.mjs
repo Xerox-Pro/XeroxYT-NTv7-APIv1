@@ -9,7 +9,7 @@ async function vercelBrowser(env,body){
 }
 async function command(env,flow,method,params){if(flow.provider==='vercel')return vercelBrowser(env,{operation:'command',sessionId:flow.sessionId,method,params});const binding=env.BROWSER;const connection=await binding.connectSession(flow.sessionId,{targetId:flow.targetId});const response=await connection.webSocket.fetch('https://browser-binding.invalid',{headers:{Upgrade:'websocket'}});const socket=response.webSocket;if(!socket)throw fail('LOGIN_BROWSER_FAILED','ブラウザに接続できません。',502);socket.accept();try{return await cdpCommand(socket,method,params);}finally{socket.close();}}
 export async function browserLogin({route,service,request,env,db,identity,fetcher}){
- if(!env.BROWSER&&env.SOCIAL_BROWSER_PROVIDER!=='vercel')throw fail('LOGIN_NOT_CONFIGURED','ログイン用ブラウザが未設定です。',503);
+ if(env.SOCIAL_BROWSER_PROVIDER==='disabled'||!env.BROWSER&&env.SOCIAL_BROWSER_PROVIDER!=='vercel')throw fail('LOGIN_NOT_CONFIGURED','ログイン用ブラウザが未設定です。',503);
  const key=`social-browser-login:${service}:${identity.id}`,privateKey=`social-private:${service}:${identity.id}`;
  const old=await db.read(key);
  const close=async flow=>{if(flow)try{if(flow.provider==='vercel')await vercelBrowser(env,{operation:'close',sessionId:flow.sessionId});else await env.BROWSER.closeSession(flow.sessionId);}catch{}};

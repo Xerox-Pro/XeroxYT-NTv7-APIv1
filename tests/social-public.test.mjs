@@ -28,3 +28,20 @@ test('public router accepts logged-out reads without accessing account sessions 
 test('provider daily quota failures are unavailable responses, not successful empty feeds',async()=>{
  let calls=0;await assert.rejects(publicData('tiktok','feed',new URLSearchParams(),async()=>{calls++;return Response.json({code:-1,msg:'Free Api Limit: 10000 request/ 1 day.'});}),{code:'PUBLIC_UPSTREAM_LIMIT',status:503});await assert.rejects(publicData('tiktok','stories',new URLSearchParams({username:'creator'}),async()=>{calls++;throw Error('must respect provider cooldown')}),{code:'PUBLIC_UPSTREAM_LIMIT'});assert.equal(calls,1);
 });
+
+
+test('Instagram exact account search recovers public metadata when web_profile_info is unavailable',async()=>{
+ const result=await publicData('instagram','search',new URLSearchParams({q:'@creator'}),async url=>{
+  if(url.includes('web_profile_info'))return new Response('not found',{status:404});
+  assert.equal(url,'https://www.instagram.com/creator/');
+  return new Response('<meta content="Creator (&#064;creator) • Instagram photos and videos" property="og:title"><meta property="og:image" content="https://cdn.example/avatar.jpg">');
+ });assert.equal(result.users[0].username,'creator');assert.equal(result.users[0].name,'Creator');
+});
+test('TikTok post resolves through verified official oEmbed when the third-party resolver is unavailable',async()=>{
+ const url='https://www.tiktok.com/@creator/video/7652308353334480135';
+ const result=await publicData('tiktok','resolve',new URLSearchParams({url}),async input=>{
+  if(input.startsWith('https://www.tikwm.com/'))return new Response('unavailable',{status:503});
+  assert.equal(new URL(input).hostname,'www.tiktok.com');assert.equal(new URL(input).pathname,'/oembed');
+  return Response.json({title:'Official public post',html:'<blockquote>Provider HTML is not rendered</blockquote>'});
+ });assert.equal(result.items[0].url,url);assert.equal(result.items[0].media,undefined);assert.equal(result.source,'tiktok official embed');assert.equal(JSON.stringify(result).includes('<blockquote>'),false);
+});

@@ -29,6 +29,11 @@ function harness(youtube) {
  const routes={}; registerShortsRoutes({get:(path,handler)=>routes[path]=handler},async()=>youtube);
  return async(path,query={},params={})=>{const res={code:200,setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;return this;}}; await routes[path]({query,params},res); return res;};
 }
+test('failed Shorts refinement preserves clips from the successful initial search',async()=>{
+ const call=harness({search:async()=>({videos:[short()],refinement_filters:['ショート'],applyRefinement:async()=>{throw Error('chip unavailable');}})});
+ const result=await call('/api/shorts',{source:'search',q:'猫'});
+ assert.equal(result.code,200);assert.equal(result.body.videos[0].videoId,'abcdefghijk');
+});
 test('search pagination follows actual continuation and short refinement, preserves query', async()=>{
  let searched=[];let refined=0;let continued=0;
  const next={videos:[short('lmnopqrstuv')],has_continuation:false};

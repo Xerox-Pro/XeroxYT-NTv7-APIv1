@@ -169,7 +169,7 @@ export function registerShortsRoutes(app, getYoutube) {
           let feed = await cached(`discovery:${query}`, async () => {
             let search = await youtube.search(query, { type: 'all' });
             const chip = search.refinement_filters?.find(name => /^(shorts|ショート(?:動画)?)$/i.test(name));
-            if (chip) search = await search.applyRefinement(chip);
+            if (chip) { try { search = await search.applyRefinement(chip); } catch(error) { if(!collectShorts(search).length)throw error; } }
             return search;
           });
           for (let index = 0; index < round; index++) {
@@ -189,7 +189,7 @@ export function registerShortsRoutes(app, getYoutube) {
           let feed = await cached(`personal-shorts:${term}`, async () => {
             let search = await youtube.search(`${term} #shorts`, { type: 'all' });
             const chip = search.refinement_filters?.find(name => /^(shorts|ショート(?:動画)?)$/i.test(name));
-            if (chip) search = await search.applyRefinement(chip);
+            if (chip) { try { search = await search.applyRefinement(chip); } catch(error) { if(!collectShorts(search).length)throw error; } }
             return search;
           });
           const found = new Map();
@@ -251,7 +251,7 @@ export function registerShortsRoutes(app, getYoutube) {
           feed = await cached(`search-feed:${query}`, async () => {
             let search = await youtube.search(query || '日本 ショート', { type: 'all' });
             const refinement = search.refinement_filters?.find(name => /^(shorts|ショート(?:動画)?)$/i.test(name));
-            if (refinement) search = await search.applyRefinement(refinement);
+            if (refinement) { try { search = await search.applyRefinement(refinement); } catch(error) { if(!collectShorts(search).length)throw error; } }
             return search;
           });
         }
