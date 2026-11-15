@@ -41,3 +41,10 @@ test('TV tile metadata provides titles, author, thumbnails and duration',()=>{
 test('raw Shorts onTap is read even when the entity ID is not a video ID',()=>{
  const r=decodeYouTubeFeed({shortsLockupViewModel:{entityId:'opaque-entity-id',onTap:{innertubeCommand:{reelWatchEndpoint:{videoId:'abcdefghijk'}}},overlayMetadata:{primaryText:{content:'本来のショートタイトル'}}}});assert.equal(r.videos[0]?.videoId,'abcdefghijk');assert.equal(r.videos[0]?.title,'本来のショートタイトル');
 });
+test('personal pagination keeps the first page visitor context in a fresh signed-in client',async()=>{
+ const make=(visitorData,execute)=>({session:{context:{client:{visitorData}}},actions:{execute}});
+ const first=await readYouTubeFeed(make('first-visitor',async()=>({data:{contents:[lockup('abcdefghijk')],continuations:[{nextContinuationData:{continuation:'account-next'}}]}})),'home','',{maxRequests:1});
+ const second=make('different-visitor',async(path,args)=>{assert.equal(args.continuation,'account-next');assert.equal(second.session.context.client.visitorData,'first-visitor');return {data:{contents:[lockup('bcdefghijkl')]}};});
+ const result=await readYouTubeFeed(second,'home',first.continuation);assert.equal(result.videos[0].videoId,'bcdefghijkl');assert.equal(result.personalized,true);
+ const bad=Buffer.from(JSON.stringify({kind:'home',tokens:['next'],visitorData:{invalid:true}})).toString('base64url');await assert.rejects(readYouTubeFeed(second,'home',bad),{status:400});
+});

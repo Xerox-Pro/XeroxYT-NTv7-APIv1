@@ -16,3 +16,8 @@ test('rejected and empty pages close the browser; arbitrary URL resolution never
  await assert.rejects(publicBrowserData('tiktok','resolve',new URLSearchParams({url:'https://localhost/private'}),env,launch),{code:'PUBLIC_URL'});assert.equal(launches,0);
  await assert.rejects(publicBrowserData('tiktok','feed',new URLSearchParams(),env,launch),{code:'PUBLIC_BROWSER_UNAVAILABLE'});assert.equal(closed,1);
 });
+test('only an explicit Cloudflare daily quota failure is described as a daily limit',async()=>{
+ const env={BROWSER:{},SOCIAL_PUBLIC_BROWSER_ENABLED:'true'};
+ await assert.rejects(publicBrowserData('tiktok','feed',new URLSearchParams(),env,async()=>{throw Error('Unable to create new browser: code: 429: message: Browser time limit exceeded for today');}),{code:'PUBLIC_BROWSER_DAILY_LIMIT'});
+ await assert.rejects(publicBrowserData('tiktok','feed',new URLSearchParams(),env,async()=>{throw Error('429 too many concurrent browsers');}),{code:'PUBLIC_BROWSER_BUSY'});
+});

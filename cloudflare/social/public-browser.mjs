@@ -60,6 +60,11 @@ export async function publicBrowserData(service,route,params,env,launch=puppetee
   const source=service+' public web · Cloudflare Browser Run';
   if(route==='search'&&params.get('kind')==='users')return {items:[],users:[...new Map(items.map(row=>[row.author,{id:row.author,username:row.author,name:row.author,avatar:''}])).values()],source,anonymous:true,cursor:'',notice:'取得できた公開投稿の投稿者です。'};
   return {items,source,anonymous:true,cursor:'',notice:'公式の公開ページから取得し、公式プレイヤーで表示します。個人向けFor Youではありません。'};
- }catch(error){if(typeof error.code==='string'&&error.code.startsWith('PUBLIC_'))throw error;throw fail('PUBLIC_BROWSER_UNAVAILABLE','公開ページの取得が混み合っているか、サービス側が取得を制限しています。');}
+ }catch(error){
+  if(typeof error.code==='string'&&error.code.startsWith('PUBLIC_'))throw error;
+  if(/browser time limit exceeded|daily.*(?:limit|quota)|limit.*(?:today|day)/i.test(String(error.message)))throw fail('PUBLIC_BROWSER_DAILY_LIMIT','Cloudflareの公開ブラウザの本日の利用上限に達しました。取得済みの公開投稿や投稿URLをご利用ください。',503);
+  if(/429|too many|concurrent|rate limit/i.test(String(error.message)))throw fail('PUBLIC_BROWSER_BUSY','Cloudflareの公開ブラウザが混み合っています。少し待ってから再試行してください。',503);
+  throw fail('PUBLIC_BROWSER_UNAVAILABLE','公開ページの取得が混み合っているか、サービス側が取得を制限しています。');
+ }
  finally{if(browser)await browser.close().catch(()=>{});}
 }

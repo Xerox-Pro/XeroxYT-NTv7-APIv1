@@ -45,3 +45,9 @@ test('TikTok post resolves through verified official oEmbed when the third-party
   return Response.json({title:'Official public post',html:'<blockquote>Provider HTML is not rendered</blockquote>'});
  });assert.equal(result.items[0].url,url);assert.equal(result.items[0].media,undefined);assert.equal(result.source,'tiktok official embed');assert.equal(JSON.stringify(result).includes('<blockquote>'),false);
 });
+test('a public browser failure never falls through to the exhausted TikWM API by default',async()=>{
+ let calls=0;await assert.rejects(publicData('tiktok','feed',new URLSearchParams(),async()=>{calls++;throw Error('TikWM must not be called');},{BROWSER:{},SOCIAL_PUBLIC_BROWSER_ENABLED:'true'},async()=>{throw Object.assign(Error('Cloudflare unavailable'),{code:'PUBLIC_BROWSER_UNAVAILABLE',status:503});}),{code:'PUBLIC_BROWSER_UNAVAILABLE'});assert.equal(calls,0);
+});
+test('a tokenless official post embed works even when the browser daily budget is exhausted',async()=>{
+ const result=await publicData('tiktok','resolve',new URLSearchParams({url:'https://www.tiktok.com/@creator/video/7652308353334480135'}),async url=>{assert.equal(new URL(url).pathname,'/oembed');return Response.json({title:'Official embed',html:'<blockquote>post</blockquote>'});},{BROWSER:{},SOCIAL_PUBLIC_BROWSER_ENABLED:'true'},()=>{throw Error('must not spend browser quota');});assert.equal(result.items.length,1);assert.equal(result.source,'tiktok official embed');
+});
