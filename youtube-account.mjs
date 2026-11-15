@@ -79,10 +79,12 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
  });
  route('post','/api/auth/cancel',async(req,res,id)=>{await store.delete('youtube-flow:'+id);return {success:true};});
  route('post','/api/auth/logout',async(req,res,id)=>{await store.delete('youtube:'+id);await store.delete('youtube-flow:'+id);return {success:true};});
- route('get','/api/user/feed/:kind',async(req,res,id)=>readRun(id,async yt=>{
-  const kind=req.params.kind,result=await readFeed(yt,kind,String(req.query.continuation||''));
+ const feedHandler=async(req,res,id)=>readRun(id,async yt=>{
+  const kind=req.params.kind,result=await readFeed(yt,kind,req.method==='POST'?req.body?.continuation||'':String(req.query.continuation||''));
   return {...result,videos:kind==='shorts'?result.videos.filter(v=>v.isShort):kind==='home'?[...result.videos,...result.playlists]:result.videos,...(kind==='shorts'?{sourceDescription:'GoogleアカウントのホームにあるShorts'}:{})};
- }));
+ });
+ route('get','/api/user/feed/:kind',feedHandler);
+ route('post','/api/user/feed/:kind',async(req,res,id)=>feedHandler({...req,method:'POST'},res,id));
  route('get','/api/user/shorts-sequence',async(req,res,id)=>readRun(id,yt=>readShortsSequence(yt,String(req.query.videoId||''),String(req.query.continuation||''))));
  route('get','/api/user/mix/:id',async(req,res,id)=>readRun(id,yt=>readYouTubeMix(yt,req.params.id,String(req.query.videoId||''),String(req.query.continuation||''))));
  route('get','/api/user/playlist/:id',async(req,res,id)=>readRun(id,async yt=>{

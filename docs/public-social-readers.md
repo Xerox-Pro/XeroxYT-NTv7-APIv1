@@ -35,6 +35,8 @@ Cloudflareの `public/resolve` で公開動画1件を取得し、返された動
 
 ログイン中の個人向けホームが失敗しても、公開おすすめに切り替えません。読み込んだ動画と継続カーソルを保持して同じページを再試行します。連携状態の確認が一時失敗しても、既知の連携情報を削除しません。TVクライアントのvisitorDataを継続カーソルに含め、リクエストごとに生成するWorkersクライアントへ復元します。OAuth情報は引き続きサーバー側の暗号化ストアから読み込みます。
 
+ホームの継続カーソルはURLではなく `POST /api/user/feed/home` のJSON本文で送ります。GASのUrlFetchAppにはURL長2,082文字の上限があるためです（https://developers.google.com/apps-script/reference/url-fetch/url-fetch-app）。既存GETは互換性のため残し、フィードPOSTは更新操作とは分けて読取としてレート制御・通信再試行します。20,000文字を超えるカーソルの画面回帰テストと、55,000文字の本文を短いURLで送るGASテストを追加しています。
+
 ## npmの比較実行
 
 - `instagram-url-direct@2.0.7`: 参考として試しましたが、従来のgraphql/query呼び出しは401になりました。製品依存には追加していません。
