@@ -8,10 +8,10 @@ import accountWorker from '../auth/worker.mjs';
 import {handleYouTubeStore} from '../../youtube-store-bridge.mjs';
 async function handleRequest(request,env,ctx){
  const pathName=new URL(request.url).pathname;
- if(/^\/api\/(instagram|tiktok)(\/|$)/.test(pathName))return Response.json({error:'Not found'},{status:404});
  const direct=(privatePath(pathName)||/^\/api\/(instagram|tiktok)(\/|$)/.test(pathName))&&/^XYT /.test(request.headers.get('Authorization')||'');
  const publicSocial=/^\/api\/(instagram|tiktok)\/public\/(feed|search|resolve|stories)$/.test(pathName)&&request.method==='GET';
  const rejected=authorizeSource(request,publicSocial||direct||request.method==='OPTIONS'?{...env,REQUIRE_PROXY_SECRET:'false'}:env);if(rejected)return rejected;
+ if(/^\/api\/(instagram|tiktok)(\/|$)/.test(pathName))return Response.json({error:'Not found'},{status:404});
  const url=new URL(request.url),path=url.pathname;
  const origin=request.headers.get('Origin'),allowed=(env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim());
  const cors=origin&&allowed.includes(origin)?{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Credentials':'true','Access-Control-Allow-Headers':'Content-Type,Authorization,Range,X-Client-Id,X-Usage-Token,X-Client-Usage','Access-Control-Allow-Methods':'GET,POST,PUT,OPTIONS','Access-Control-Max-Age':'600','Access-Control-Expose-Headers':'X-Daily-Usage-Token,Retry-After','Vary':'Origin'}:{};
