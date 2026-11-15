@@ -1,14 +1,14 @@
 import {secureApiResponse} from '../security/http.mjs';
 import {frontendRequest} from './frontend.mjs';
 import {withGasKey} from './gas-key.mjs';
-import {handleSocialApi,socialCallback} from '../social/api.mjs';
+
 import {privatePath,handlePrivateApi,issuePrivateTicket} from './private-api.mjs';
 import {authorizeSource} from '../../access-policy.mjs';
 import accountWorker from '../auth/worker.mjs';
 import {handleYouTubeStore} from '../../youtube-store-bridge.mjs';
 async function handleRequest(request,env,ctx){
  const pathName=new URL(request.url).pathname;
- if(socialCallback(pathName))return handleSocialApi(request,env);
+ if(/^\/api\/(instagram|tiktok)(\/|$)/.test(pathName))return Response.json({error:'Not found'},{status:404});
  const direct=(privatePath(pathName)||/^\/api\/(instagram|tiktok)(\/|$)/.test(pathName))&&/^XYT /.test(request.headers.get('Authorization')||'');
  const publicSocial=/^\/api\/(instagram|tiktok)\/public\/(feed|search|resolve|stories)$/.test(pathName)&&request.method==='GET';
  const rejected=authorizeSource(request,publicSocial||direct||request.method==='OPTIONS'?{...env,REQUIRE_PROXY_SECRET:'false'}:env);if(rejected)return rejected;
@@ -20,7 +20,7 @@ async function handleRequest(request,env,ctx){
  try{
   if(path==='/internal/youtube-store'){const denied=authorizeSource(request,{...env,REQUIRE_PROXY_SECRET:'true'});if(denied)return denied;return await handleYouTubeStore(request,env.DB);}
   if(path==='/api/account/cloudflare-session'&&request.method==='GET')response=await issuePrivateTicket(request,env);
-  else if(/^\/api\/(instagram|tiktok)(\/|$)/.test(path))response=await handleSocialApi(request,env);
+  else if(/^\/api\/(instagram|tiktok)(\/|$)/.test(path))response=Response.json({error:'Not found'},{status:404});
   else if(privatePath(path))response=await handlePrivateApi(request,env);
   else if(path.startsWith('/api/account/'))response=await accountWorker.fetch(request,env);
   else if(path==='/health')response=Response.json({ok:true,runtime:'cloudflare-workers',implementation:'full-express-api'});
