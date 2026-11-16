@@ -18,7 +18,7 @@ test('rejected API requests still carry security headers and never reflect an un
  assert.equal(response.status,403);assert.equal(response.headers.get('X-Frame-Options'),'DENY');assert.equal(response.headers.get('X-Content-Type-Options'),'nosniff');assert.match(response.headers.get('Content-Security-Policy'),/default-src 'none'/);assert.equal(response.headers.get('Access-Control-Allow-Origin'),null);
 });
 test('session import attempts have their own stricter atomic rate limit',async()=>{
- let count=0;const db={prepare(){return{bind(key){assert.match(key,/social-connect/);return{async first(){return{count:++count,window_start:Date.now()};}};}};}};
+ let count=0;const db={prepare(sql){return{bind(key){if(sql.startsWith('SELECT'))return{async first(){return null;}};assert.match(key,/social-connect/);return{async first(){return{count:++count,window_start:Date.now()};}};}};}};
  for(let i=0;i<3;i++)assert.equal(await privateRateLimit(db,'alice','/api/instagram/unofficial/connect','POST'),null);
  assert.equal((await privateRateLimit(db,'alice','/api/instagram/unofficial/connect','POST')).status,429);
 });
