@@ -12,12 +12,21 @@ const validPass = password => typeof password === 'string' && password.length >=
 async function currentUser(request, db) {
   const token = /(?:^|;\s*)__Host-xy_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get('Cookie') || '')?.[1];
   if (!token) return null;
-  return db.prepare('SELECT users.id, users.username FROM sessions JOIN users ON users.id = sessions.user_id WHERE token_hash = ? AND expires_at > ?').bind(hash(token), Date.now()).first();
+  return db.prepare('SELECT users.id, users.username, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(hash(token), Date.now()).first();
 }
-async function startSession(db, user) {
+const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&user.username===env.MASTER_USERNAME.trim().toLowerCase();
+const publicUser = (user,env) => ({id:user.id,username:user.username,...(isMaster(user,env)?{admin:true}:{})});
+const usageDay = now => new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0,10);
+async function recordUsage(db,user,request){
+  const now=Date.now(),path=request.headers.get('x-account-usage-path')||'';
+  const video=/^\/(?:api\/video\/|stream\/|360\/|edu\/|scratch-edu\/)/.test(path)?1:0;
+  const search=/^\/api\/search(?:\/|$)/.test(path)?1:0;
+  await db.prepare('INSERT INTO account_usage(user_id,day,requests,videos,searches,last_seen) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,day) DO UPDATE SET requests=requests+1,videos=videos+excluded.videos,searches=searches+excluded.searches,last_seen=excluded.last_seen').bind(user.id,usageDay(now),1,video,search,now).run();
+}
+async function startSession(db, user, env) {
   const token = randomBytes(32).toString('hex');
   await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').bind(hash(token), user.id, Date.now() + MAX_AGE * 1000).run();
-  return json({ user: { id: user.id, username: user.username } }, 200, { 'Set-Cookie': cookie(token) });
+  return json({ user: publicUser(user,env) }, 200, { 'Set-Cookie': cookie(token) });
 }
 async function limit(db, key, max) {
   const now = Date.now();
@@ -38,7 +47,11 @@ export default {
       if (Number(request.headers.get('content-length') || 0) > 131072) return json({ error: 'データが大きすぎます。' }, 413);
       if (request.method === 'GET' && path === '/session') {
         const user = await currentUser(request, env.DB);
-        return user ? json({ user }) : json({ error: 'ログインが必要です。' }, 401);
+        if(!user)return json({ error: 'ログインが必要です。' }, 401);
+        if(user.banned)return json({error:'このアカウントは利用できません。'},403);
+        if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
+        await recordUsage(env.DB,user,request);
+        return json({ user:publicUser(user,env) });
       }
       if (request.method === 'POST' && (path === '/register' || path === '/login')) {
         const body = await requestJson(request);
@@ -52,16 +65,48 @@ export default {
           const user = { id: crypto.randomUUID(), username };
           const result = await env.DB.prepare('INSERT OR IGNORE INTO users (id, username, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)').bind(user.id, username, passHash(password, salt), salt, Date.now()).run();
           if (!result.meta.changes) return json({ error: 'そのユーザー名は使用できません。' }, 409);
-          return startSession(env.DB, user);
+          return startSession(env.DB, user, env);
         }
-        const user = await env.DB.prepare('SELECT id, username, password_hash, password_salt FROM users WHERE username = ?').bind(username).first();
+        const user = await env.DB.prepare('SELECT users.id, users.username, users.password_hash, users.password_salt, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id WHERE users.username = ?').bind(username).first();
         const actual = passHash(password, user?.password_salt || '00000000000000000000000000000000');
         const expected = user?.password_hash || '0'.repeat(64);
         if (!timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex')) || !user) return json({ error: 'ユーザー名またはパスワードが違います。' }, 401);
-        return startSession(env.DB, user);
+        if(user.banned)return json({error:'このアカウントは利用できません。'},403);
+        if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
+        return startSession(env.DB, user, env);
       }
       const user = await currentUser(request, env.DB);
       if (!user) return json({ error: 'ログインが必要です。' }, 401);
+      if(user.banned)return json({error:'このアカウントは利用できません。'},403);
+      if(user.traffic_stopped&&!isMaster(user,env))return json({error:'このアカウントの通信は停止されています。'},423);
+      if(path==='/admin/accounts'&&request.method==='GET'){
+        if(!isMaster(user,env))return json({error:'見つかりません。'},404);
+        const result=await env.DB.prepare("SELECT users.id,users.username,users.created_at,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped,COALESCE(SUM(account_usage.requests),0) AS requests,COALESCE(SUM(account_usage.videos),0) AS videos,COALESCE(SUM(account_usage.searches),0) AS searches,MAX(account_usage.last_seen) AS last_seen FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_usage ON account_usage.user_id=users.id GROUP BY users.id ORDER BY users.created_at DESC").bind().all();
+        return json({accounts:result.results||[]});
+      }
+      const adminMatch=/^\/admin\/accounts\/([0-9a-f-]{36})$/.exec(path);
+      if(adminMatch&&request.method==='POST'){
+        if(!isMaster(user,env))return json({error:'見つかりません。'},404);
+        const targetId=adminMatch[1],target=await env.DB.prepare('SELECT id,username FROM users WHERE id=?').bind(targetId).first();
+        if(!target)return json({error:'アカウントが見つかりません。'},404);
+        if(isMaster(target,env))return json({error:'管理アカウント自身は変更できません。'},400);
+        const body=await requestJson(request),action=body.action;
+        if(action==='delete'){
+          for(const [sql,args] of [['DELETE FROM api_oauth_flows WHERE user_id LIKE ?',[`%:${targetId}%`]],['DELETE FROM account_usage WHERE user_id=?',[targetId]],['DELETE FROM account_controls WHERE user_id=?',[targetId]],['DELETE FROM history WHERE user_id=?',[targetId]],['DELETE FROM sessions WHERE user_id=?',[targetId]],['DELETE FROM users WHERE id=?',[targetId]]])await env.DB.prepare(sql).bind(...args).run();
+          return json({ok:true});
+        }
+        if(action==='resetPassword'){
+          if(!validPass(body.password))return json({error:'新しいパスワードは12文字以上にしてください。'},400);
+          const salt=randomBytes(16).toString('hex');await env.DB.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').bind(passHash(body.password,salt),salt,targetId).run();await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();return json({ok:true});
+        }
+        if(action==='ban'||action==='traffic'){
+          const column=action==='ban'?'banned':'traffic_stopped',enabled=body.enabled?1:0;
+          await env.DB.prepare(`INSERT INTO account_controls(user_id,${column},updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`).bind(targetId,enabled,Date.now()).run();
+          if(enabled)await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();
+          return json({ok:true});
+        }
+        return json({error:'操作が不正です。'},400);
+      }
       if (request.method === 'POST' && path === '/logout') {
         const token = /(?:^|;\s*)__Host-xy_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get('Cookie') || '')?.[1];
         if (token) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(hash(token)).run();

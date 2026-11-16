@@ -21,3 +21,21 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   count INTEGER NOT NULL,
   window_start INTEGER NOT NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_username_nocase ON users(LOWER(username));
+CREATE TABLE IF NOT EXISTS account_controls (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  banned INTEGER NOT NULL DEFAULT 0,
+  traffic_stopped INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS account_usage (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  videos INTEGER NOT NULL DEFAULT 0,
+  searches INTEGER NOT NULL DEFAULT 0,
+  last_seen INTEGER NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
+CREATE TABLE IF NOT EXISTS api_oauth_flows (user_id TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at INTEGER NOT NULL);

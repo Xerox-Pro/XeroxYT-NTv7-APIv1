@@ -12,8 +12,9 @@ export async function privateIdentity(request,env){
  let hash=cookieHash(request);
  if(token){try{const [body,mac,...extra]=token.split('.');if(extra.length||!body||!mac||body.length>2048)return null;const expected=Buffer.from(signature(body,env.API_SHARED_SECRET)),provided=Buffer.from(mac);if(expected.length!==provided.length||!timingSafeEqual(expected,provided))return null;const value=JSON.parse(Buffer.from(body,'base64url').toString());if(!value||!Number.isSafeInteger(value.exp)||typeof value.session!=='string'||!/^([a-f0-9]{64})$/.test(value.session)||typeof value.origin!=='string'||value.exp<=Date.now()||value.exp>Date.now()+310000||value.origin!==request.headers.get('origin'))return null;hash=value.session;}catch{return null;}}
  if(!hash)return null;
- const row=await env.DB.prepare('SELECT users.id FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires_at>?').bind(hash,Date.now()).first();
- return row?{id:row.id,hash}:null;
+ const row=await env.DB.prepare('SELECT users.id,users.username,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped FROM sessions JOIN users ON users.id=sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id WHERE token_hash=? AND expires_at>?').bind(hash,Date.now()).first();
+ const master=typeof env.MASTER_USERNAME==='string'&&row?.username===env.MASTER_USERNAME.trim().toLowerCase();
+ return row&&!row.banned&&!row.traffic_stopped?{id:row.id,hash,admin:master}:null;
 }
 export async function issuePrivateTicket(request,env){
  const identity=await privateIdentity(request,env);if(!identity)return Response.json({error:'ログインが必要です。'},{status:401,headers:{'Cache-Control':'no-store'}});
@@ -33,7 +34,7 @@ export function createPrivateRouter(register=registerYouTubeAccount){
  const parts=url.pathname.split('/');
  for(const route of routes){if(route.method!==request.method||route.parts.length!==parts.length)continue;const params={};if(!route.parts.every((p,i)=>p.startsWith(':')?(params[p.slice(1)]=decodeURIComponent(parts[i]),true):p===parts[i]))continue;
  let body;if(!['GET','HEAD'].includes(request.method)){let input;try{input=new TextDecoder().decode(await boundedBytes(request));}catch{return Response.json({error:'データが大きすぎます。'},{status:413});}if(input&&!request.headers.get('content-type')?.toLowerCase().startsWith('application/json'))return Response.json({error:'不正な形式です。'},{status:415});if(Buffer.byteLength(input)>131072)return Response.json({error:'データが大きすぎます。'},{status:413});try{body=input?JSON.parse(input):undefined;}catch{return Response.json({error:'不正な形式です。'},{status:400});}}
- let response,status=200;const headers=new Headers({'Cache-Control':'private, no-store'});const res={locals:{siteAccountId:identity.id},headersSent:false,setHeader(k,v){headers.set(k,v);},status(value){status=value;return this;},json(value){this.headersSent=true;response=Response.json(value,{status,headers});return this;}};
+ let response,status=200;const headers=new Headers({'Cache-Control':'private, no-store'});const res={locals:{siteAccountId:identity.id,siteAccountAdmin:identity.admin},headersSent:false,setHeader(k,v){headers.set(k,v);},status(value){status=value;return this;},json(value){this.headersSent=true;response=Response.json(value,{status,headers});return this;}};
  await route.handler({params,query:Object.fromEntries(url.searchParams),body},res);return response||new Response(null,{status:204,headers});
  }
  return Response.json({error:'Not found'},{status:404});

@@ -5,7 +5,7 @@ import {readYouTubeProfile} from './youtube-profile.mjs';
 import {readYouTubeFeed} from './youtube-feed.mjs';
 import {createHash,randomBytes,randomUUID,createCipheriv,createDecipheriv} from 'node:crypto';
 import {collectShorts} from './shorts.mjs';
-const publicMessages=new Set(["Googleアカウントを連携してください。", "Google認証コードを取得できませんでした。", "YouTubeからショートの開始動画を取得できませんでした。再試行してください。", "YouTubeから次のショートを取得できませんでした。再試行してください。", "YouTubeが一覧の取得を拒否しました。", "YouTubeのショート取得に失敗しました。再試行してください。", "YouTubeの認証確認に一時的に失敗しました。連携は保持しています。再試行してください。", "YouTubeの連携状態が変わりました。開き直してください。", "YouTube連携が無効になりました。再連携してください。", "YouTube連携のサーバー設定が不足しています。", "このミックスリストを読み込めませんでした。時間をおいて再試行してください。", "コメントが無効です。", "ショートの続きの情報が無効です。開き直してください。", "ショート動画IDが無効です。", "チャンネルIDが無効です。", "ミックスリストIDが無効です。", "ミックスリストに再生できる動画がありません。", "ミックスリストの続きの情報が無効です。", "ログインが必要です。", "不明なフィードです。", "再生リストIDが無効です。", "再生リスト名が無効です。", "動画IDが無効です。", "動画一覧が無効です。", "未対応の操作です。", "続きの情報が無効です。", "続きの情報が無効です。ページを開き直してください。", "認証コードが期限切れです。もう一度連携してください。", "連携状態が変わりました。"]);
+const publicMessages=new Set(["Googleアカウントを連携してください。", "先に推薦用Googleアカウントをこの管理アカウントへ連携してください。", "Google認証コードを取得できませんでした。", "YouTubeからショートの開始動画を取得できませんでした。再試行してください。", "YouTubeから次のショートを取得できませんでした。再試行してください。", "YouTubeが一覧の取得を拒否しました。", "YouTubeのショート取得に失敗しました。再試行してください。", "YouTubeの認証確認に一時的に失敗しました。連携は保持しています。再試行してください。", "YouTubeの連携状態が変わりました。開き直してください。", "YouTube連携が無効になりました。再連携してください。", "YouTube連携のサーバー設定が不足しています。", "このミックスリストを読み込めませんでした。時間をおいて再試行してください。", "コメントが無効です。", "ショートの続きの情報が無効です。開き直してください。", "ショート動画IDが無効です。", "チャンネルIDが無効です。", "ミックスリストIDが無効です。", "ミックスリストに再生できる動画がありません。", "ミックスリストの続きの情報が無効です。", "ログインが必要です。", "不明なフィードです。", "再生リストIDが無効です。", "再生リスト名が無効です。", "動画IDが無効です。", "動画一覧が無効です。", "未対応の操作です。", "続きの情報が無効です。", "続きの情報が無効です。ページを開き直してください。", "認証コードが期限切れです。もう一度連携してください。", "連携状態が変わりました。"]);
 export function youtubePublicError(error){
  const upstream=upstreamFailure(error);if(upstream)return upstream;
  const known=publicMessages.has(error?.message);
@@ -21,6 +21,7 @@ export function credentialVault(secret){
 }
 const text=value=>typeof value==='string'?value:value?.text||value?.toString?.()||'';
 export function registerYouTubeAccount(app,{store,secret,createClient,createPublicClient,formatVideo,formatChannel,Search,ContinuationItem,Feed,fetcher=fetch,feedOptions={}}){
+ const recommendationSourceId='recommendation-source';
  const readFeed=(yt,kind,cursor='')=>readYouTubeFeed(yt,kind,cursor,feedOptions);
  let vault;const getVault=()=>vault||(vault=credentialVault(secret));
  const read=async id=>{const row=await store.get('youtube:'+id);return row&&row.expires>Date.now()?getVault().open(row.flow,id):null;};
@@ -46,6 +47,11 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
   }finally{await persist();}
  };
  const readRun=(id,work)=>run(id,work,{retryRead:true});
+ const recommendationRun=async(id,work)=>{
+  if(await read(id))return readRun(id,work);
+  if(!await read(recommendationSourceId))throw Object.assign(new Error('Googleアカウントを連携してください。'),{status:401,code:'YOUTUBE_NOT_LINKED'});
+  return readRun(recommendationSourceId,work);
+ };
  const sendError=(res,error)=>{
   const safe=youtubePublicError(error);
   console.warn(JSON.stringify({event:'youtube_account_error',code:safe.code,status:safe.status}));
@@ -54,7 +60,18 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
  };
  const route=(method,path,work)=>app[method](path,async(req,res)=>{res.setHeader('Cache-Control','private, no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');try{if(typeof res.locals.siteAccountId!=='string'||!res.locals.siteAccountId)throw Object.assign(new Error('ログインが必要です。'),{status:401});const result=await work(req,res,res.locals.siteAccountId);if(!res.headersSent)res.json(result);}catch(error){sendError(res,error);}});
  const google=async(path,body)=>{const response=await fetcher('https://oauth2.googleapis.com/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(10000)});const data=await response.json();return {ok:response.ok,data};};
- route('get','/api/auth/status',async(req,res,id)=>{const link=await read(id);return {connected:!!link,user:link?.user||null,client:'TV',limitations:'Google OAuthはTVクライアントに対応しています。YouTube側の対応状況によって利用できない機能があります。'};});
+ route('get','/api/auth/status',async(req,res,id)=>{const link=await read(id),source=await read(recommendationSourceId);return {connected:!!link,user:link?.user||null,recommendationSource:!link&&!!source,client:'TV',limitations:'Google OAuthはTVクライアントに対応しています。YouTube側の対応状況によって利用できない機能があります。'};});
+ route('get','/api/user/admin/recommendation-source',async(req,res,id)=>{
+  if(!res.locals.siteAccountAdmin)throw Object.assign(new Error('Not found'),{status:404});
+  const source=await read(recommendationSourceId);return {configured:!!source,user:source?.user||null};
+ });
+ route('post','/api/user/admin/recommendation-source',async(req,res,id)=>{
+  if(!res.locals.siteAccountAdmin)throw Object.assign(new Error('Not found'),{status:404});
+  if(req.body?.action==='remove'){await store.delete('youtube:'+recommendationSourceId);return {configured:false};}
+  if(req.body?.action!=='useCurrent')throw Object.assign(new Error('未対応の操作です。'),{status:400});
+  const current=await read(id);if(!current)throw Object.assign(new Error('先に推薦用Googleアカウントをこの管理アカウントへ連携してください。'),{status:400});
+  await save(recommendationSourceId,current);return {configured:true,user:current.user||null};
+ });
  route('post','/api/auth/signin',async(req,res,id)=>{
   getVault();const existing=await store.get('youtube-flow:'+id);if(existing&&existing.expires>Date.now()){const previous=getVault().open(existing.flow,id);if(previous.userCode&&previous.verificationUrl)return {userCode:previous.userCode,verificationUrl:previous.verificationUrl,expiresAt:existing.expires,interval:previous.interval};}
   const yt=await createClient();const client=await yt.session.oauth.getClientID();if(!client?.client_id||!client?.client_secret)throw new Error('OAuth client unavailable');
@@ -79,10 +96,10 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
  });
  route('post','/api/auth/cancel',async(req,res,id)=>{await store.delete('youtube-flow:'+id);return {success:true};});
  route('post','/api/auth/logout',async(req,res,id)=>{await store.delete('youtube:'+id);await store.delete('youtube-flow:'+id);return {success:true};});
- route('get','/api/user/feed/:kind',async(req,res,id)=>readRun(id,async yt=>{
-  const kind=req.params.kind,result=await readFeed(yt,kind,String(req.query.continuation||''));
-  return {...result,videos:kind==='shorts'?result.videos.filter(v=>v.isShort):kind==='home'?[...result.videos,...result.playlists]:result.videos,...(kind==='shorts'?{sourceDescription:'GoogleアカウントのホームにあるShorts'}:{})};
- }));
+ route('get','/api/user/feed/:kind',async(req,res,id)=>{
+  const kind=req.params.kind,execute=['home','shorts'].includes(kind)?recommendationRun:readRun;
+  return execute(id,async yt=>{const result=await readFeed(yt,kind,String(req.query.continuation||''));return {...result,videos:kind==='shorts'?result.videos.filter(v=>v.isShort):kind==='home'?[...result.videos,...result.playlists]:result.videos,...(kind==='shorts'?{sourceDescription:'推薦用アカウントのホームにあるShorts'}:{})};});
+ });
  route('get','/api/user/shorts-sequence',async(req,res,id)=>readRun(id,yt=>readShortsSequence(yt,String(req.query.videoId||''),String(req.query.continuation||''))));
  route('get','/api/user/mix/:id',async(req,res,id)=>readRun(id,yt=>readYouTubeMix(yt,req.params.id,String(req.query.videoId||''),String(req.query.continuation||''))));
  route('get','/api/user/playlist/:id',async(req,res,id)=>readRun(id,async yt=>{

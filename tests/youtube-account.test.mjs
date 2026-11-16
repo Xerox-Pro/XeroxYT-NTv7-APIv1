@@ -13,7 +13,7 @@ test('device OAuth survives requests, respects polling interval, never sends tok
  // Each authenticated request owns its own instance.
  let instance;const factory=async()=>{instance=await createClient();return instance;};
  class FakeFeed{constructor(){Object.assign(this,feed);}}
- const app=express();app.use(express.json());app.use((req,res,next)=>{res.locals.siteAccountId=req.headers['x-test-user']||'alice';next();});
+ const app=express();app.use(express.json());app.use((req,res,next)=>{res.locals.siteAccountId=req.headers['x-test-user']||'alice';res.locals.siteAccountAdmin=req.headers['x-test-admin']==='1';next();});
  registerYouTubeAccount(app,{store,secret,createClient:factory,formatVideo:v=>v.id?{videoId:v.id,title:v.title}:null,formatChannel:v=>v,ContinuationItem:class{},Feed:FakeFeed,fetcher:async(url,options)=>{googleCalls++;const data=JSON.parse(options.body);if(url.endsWith('device/code')){assert.equal(data.scope,'http://gdata.youtube.com');return Response.json({device_code:'private-device-code',user_code:'ABCD',verification_url:'https://www.google.com/device',expires_in:1800,interval:5});}return Response.json(credentials);}});
  const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));const base='http://127.0.0.1:'+server.address().port;
  try{
@@ -24,6 +24,10 @@ test('device OAuth survives requests, respects polling interval, never sends tok
   r=await fetch(base+'/api/user/feed/home');const home=await r.json();assert.equal(home.videos[0].title,'personal');assert.equal(home.hasMore,false,'a repeated provider token must not loop');assert.match(r.headers.get('cache-control'),/private.*no-store/);
   authUnavailable=true;r=await fetch(base+'/api/user/feed/home');assert.equal(r.status,503);assert.equal((await (await fetch(base+'/api/auth/status')).json()).connected,true);authUnavailable=false;
   r=await fetch(base+'/api/user/feed/home',{headers:{'x-test-user':'bob'}});assert.equal(r.status,401);
+  r=await fetch(base+'/api/user/admin/recommendation-source',{method:'POST',headers:{'Content-Type':'application/json','x-test-admin':'1'},body:JSON.stringify({action:'useCurrent'})});assert.equal(r.status,200);
+  r=await fetch(base+'/api/auth/status',{headers:{'x-test-user':'bob'}});assert.equal((await r.json()).recommendationSource,true);
+  r=await fetch(base+'/api/user/feed/home',{headers:{'x-test-user':'bob'}});assert.equal(r.status,200);assert.equal((await r.json()).videos[0].title,'personal');
+  r=await fetch(base+'/api/user/action',{method:'POST',headers:{'Content-Type':'application/json','x-test-user':'bob'},body:JSON.stringify({action:'like',videoId:'abcdefghijk'})});assert.equal(r.status,401);assert.equal(likes,0,'the shared recommendation account must never receive another user action');
   r=await fetch(base+'/api/user/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'like',videoId:'abcdefghijk'})});assert.equal(r.status,200);assert.equal(likes,1);
   r=await fetch(base+'/api/user/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'like',videoId:'bad'})});assert.equal(r.status,400);assert.equal(likes,1);
   r=await fetch(base+'/api/user/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'subscribe',channelId:'UC'+'a'.repeat(22)})});assert.equal(r.status,200);
