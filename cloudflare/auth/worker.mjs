@@ -48,7 +48,7 @@ export default {
       if (request.method === 'GET' && path === '/session') {
         const user = await currentUser(request, env.DB);
         if(!user)return json({ error: 'ログインが必要です。' }, 401);
-        if(user.banned)return json({error:'このアカウントは利用できません。'},403);
+        if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
         if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
         await recordUsage(env.DB,user,request);
         return json({ user:publicUser(user,env) });
@@ -71,13 +71,13 @@ export default {
         const actual = passHash(password, user?.password_salt || '00000000000000000000000000000000');
         const expected = user?.password_hash || '0'.repeat(64);
         if (!timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex')) || !user) return json({ error: 'ユーザー名またはパスワードが違います。' }, 401);
-        if(user.banned)return json({error:'このアカウントは利用できません。'},403);
+        if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
         if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
         return startSession(env.DB, user, env);
       }
       const user = await currentUser(request, env.DB);
       if (!user) return json({ error: 'ログインが必要です。' }, 401);
-      if(user.banned)return json({error:'このアカウントは利用できません。'},403);
+      if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
       if(user.traffic_stopped&&!isMaster(user,env))return json({error:'このアカウントの通信は停止されています。'},423);
       if(path==='/admin/accounts'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
@@ -102,7 +102,10 @@ export default {
         if(action==='ban'||action==='traffic'){
           const column=action==='ban'?'banned':'traffic_stopped',enabled=body.enabled?1:0;
           await env.DB.prepare(`INSERT INTO account_controls(user_id,${column},updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`).bind(targetId,enabled,Date.now()).run();
-          if(enabled)await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();
+          // Keep a banned account's session only so every device can receive the
+          // explicit BAN response and persist its lock screen. All account data
+          // routes remain blocked above. Traffic stops still revoke sessions.
+          if(enabled&&action==='traffic')await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();
           return json({ok:true});
         }
         return json({error:'操作が不正です。'},400);
