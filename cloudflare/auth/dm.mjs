@@ -1,4 +1,5 @@
 import {requestJson} from '../security/http.mjs';
+import {handleGroups} from './groups.mjs';
 const reply=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'private, no-store'}});
 export function moderateMessage(text){
  const normalized=text.normalize('NFKC').replace(/[\s\u200b-\u200f]/g,'').toLowerCase();
@@ -9,13 +10,17 @@ export async function handleDm(request,env,user,admin){
  const db=env.DB,path=new URL(request.url).pathname.replace('/api/account/dm',''),method=request.method,now=Date.now();
  const limited=async(kind,maximum,window)=>{const row=await db.prepare('INSERT INTO login_attempts(key,count,window_start) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN window_start<? THEN 1 ELSE count+1 END,window_start=CASE WHEN window_start<? THEN excluded.window_start ELSE window_start END RETURNING count').bind('dm:'+kind+':'+user.id,now,now-window,now-window).first();return row.count>maximum;};
  if(await limited('all',90,60000))return reply({error:'しばらく待ってから操作してください。'},429);
- if(path==='/reports'&&method==='GET'&&admin){const rows=await db.prepare('SELECT r.id,r.reason,r.created_at,m.body FROM dm_reports r LEFT JOIN dm_messages m ON m.id=r.message_id ORDER BY r.created_at DESC LIMIT 100').bind().all();return reply({reports:rows.results||[]});}
+ const groupResponse=await handleGroups(request,env,user,admin,path,moderateMessage);if(groupResponse)return groupResponse;
+ const profile=await db.prepare('SELECT nickname FROM dm_profiles WHERE user_id=?').bind(user.id).first();
+ if(!profile&&path==='')return reply({threads:[],needsProfile:true});
+ if(!profile)return reply({error:'先にDM用の表示名を設定してください。',code:'DM_PROFILE_REQUIRED'},409);
+ if(path==='/reports'&&method==='GET'&&admin){const rows=await db.prepare('SELECT r.id,r.reason,r.created_at,m.body FROM dm_reports r LEFT JOIN dm_messages m ON m.id=r.message_id UNION ALL SELECT r.id,r.reason,r.created_at,m.body FROM dm_room_reports r JOIN dm_room_messages m ON m.id=r.message_id ORDER BY 3 DESC LIMIT 100').bind().all();return reply({reports:rows.results||[]});}
  const reported=/^\/reports\/([0-9a-f-]{36})\/ban$/.exec(path);
- if(reported&&method==='POST'&&admin){const row=await db.prepare('SELECT m.sender FROM dm_reports r JOIN dm_messages m ON m.id=r.message_id WHERE r.id=?').bind(reported[1]).first();if(!row)return reply({error:'対象のメッセージがありません。'},404);const target=await db.prepare('SELECT username FROM users WHERE id=?').bind(row.sender).first();if(target?.username===String(env.MASTER_USERNAME||'').trim().toLowerCase())return reply({error:'管理者はこの操作の対象外です。'},400);await db.prepare('INSERT INTO account_controls(user_id,banned,updated_at) VALUES(?,1,?) ON CONFLICT(user_id) DO UPDATE SET banned=1,updated_at=excluded.updated_at').bind(row.sender,now).run();return reply({ok:true});}
+ if(reported&&method==='POST'&&admin){let row=await db.prepare('SELECT m.sender FROM dm_reports r JOIN dm_messages m ON m.id=r.message_id WHERE r.id=?').bind(reported[1]).first();if(!row)row=await db.prepare('SELECT m.sender FROM dm_room_reports r JOIN dm_room_messages m ON m.id=r.message_id WHERE r.id=?').bind(reported[1]).first();if(!row)return reply({error:'対象のメッセージがありません。'},404);const target=await db.prepare('SELECT username FROM users WHERE id=?').bind(row.sender).first();if(target?.username===String(env.MASTER_USERNAME||'').trim().toLowerCase())return reply({error:'管理者はこの操作の対象外です。'},400);await db.prepare('INSERT INTO account_controls(user_id,banned,updated_at) VALUES(?,1,?) ON CONFLICT(user_id) DO UPDATE SET banned=1,updated_at=excluded.updated_at').bind(row.sender,now).run();return reply({ok:true});}
  const allowed=thread=>admin||thread.kind==='appeal'||(!user.banned&&!user.traffic_stopped);
  if(method==='GET'&&path===''){
-  const result=await db.prepare('SELECT id,initiator,status,kind,updated_at FROM dm_threads WHERE a=? OR b=? ORDER BY updated_at DESC LIMIT 100').bind(user.id,user.id).all();
-  return reply({threads:(result.results||[]).filter(t=>(t.status!=='pending'||t.initiator!==user.id)&&(admin||t.kind==='appeal'||(!user.banned&&!user.traffic_stopped))).map(t=>({id:t.id,status:t.status,kind:t.kind,incoming:t.initiator!==user.id,updatedAt:t.updated_at,label:t.kind==='appeal'?'BAN解除申請':admin?'ユーザーとの会話':'匿名の会話'}))});
+  const result=await db.prepare('SELECT t.id,t.initiator,t.status,t.kind,t.updated_at,p.nickname FROM dm_threads t LEFT JOIN dm_profiles p ON p.user_id=CASE WHEN t.a=? THEN t.b ELSE t.a END WHERE t.a=? OR t.b=? ORDER BY t.updated_at DESC LIMIT 100').bind(user.id,user.id,user.id).all();
+  return reply({threads:(result.results||[]).filter(t=>(t.status!=='pending'||t.initiator!==user.id)&&(admin||t.kind==='appeal'||(!user.banned&&!user.traffic_stopped))).map(t=>({id:t.id,status:t.status,kind:t.kind,incoming:t.initiator!==user.id,updatedAt:t.updated_at,label:t.kind==='appeal'?'BAN解除申請':t.status==='accepted'?(t.nickname||'匿名の会話'):'匿名の申請'}))});
  }
  if(method==='POST'&&path==='/request'){
   if(user.banned||user.traffic_stopped)return reply({error:'解除申請だけ利用できます。'},403);

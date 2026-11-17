@@ -10,6 +10,15 @@ test('DM consent, opaque identities, isolation, blocks, moderation, reports and 
  const send=(path,cookie,body)=>worker.fetch(new Request('https://api.test/api/account'+path,{method:body===undefined?'GET':'POST',headers:{Origin:'https://site.test','Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})}),env);
  const register=async username=>{const response=await send('/register',null,{username,password:'a secure password 123'});return {cookie:response.headers.get('set-cookie').split(';')[0],user:(await response.json()).user};};
  const master=await register('master'),alice=await register('alice'),bob=await register('bob'),other=await register('other');
+ for(const [i,account]of [master,alice,bob,other].entries())assert.equal((await send('/dm/profile',account.cookie,{nickname:'表示名'+i})).status,200);
+ const open=(await (await send('/dm/rooms',alice.cookie)).json()).rooms.find(room=>room.id==='open');assert.equal(open.status,'joined');
+ const created=await (await send('/dm/rooms',alice.cookie,{name:'招待の部屋',visibility:'private'})).json();
+ assert.equal((await send('/dm/rooms/'+created.id,bob.cookie)).status,404);
+ assert.equal((await send('/dm/rooms/'+created.id+'/invite',alice.cookie,{target:'bob'})).status,200);
+ assert.equal((await send('/dm/rooms/'+created.id,bob.cookie)).status,403);
+ assert.equal((await send('/dm/rooms/'+created.id+'/join',bob.cookie,{})).status,200);
+ assert.equal((await send('/dm/rooms/'+created.id+'/send',bob.cookie,{text:'グループの発言'})).status,200);
+ const group=(await (await send('/dm/rooms/'+created.id,alice.cookie)).json());assert.equal(group.messages[0].name,'表示名2');assert.ok(!JSON.stringify(group).includes(bob.user.id));
  const invite=await send('/dm/request',alice.cookie,{target:'bob'}),missing=await send('/dm/request',other.cookie,{target:'no_such_id'});assert.deepEqual(await invite.json(),await missing.json());
  assert.deepEqual((await (await send('/dm',alice.cookie)).json()).threads,[]);
  const thread=(await (await send('/dm',bob.cookie)).json()).threads[0];assert.ok(thread.incoming);assert.ok(!JSON.stringify(thread).includes('alice'));
