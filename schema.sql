@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS api_oauth_flows (user_id TEXT PRIMARY KEY, data TEXT 
 CREATE UNIQUE INDEX IF NOT EXISTS users_username_nocase ON users(LOWER(username));
 CREATE TABLE IF NOT EXISTS account_visual_modes (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  mode TEXT NOT NULL DEFAULT 'off' CHECK (mode IN ('off','chaos','chaos2','jelly')),
+  mode TEXT NOT NULL DEFAULT 'off' CHECK (mode IN ('off','chaos','chaos2','jelly','spin')),
   updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS account_controls (

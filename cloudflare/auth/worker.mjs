@@ -133,7 +133,7 @@ export default {
         if(!target)return json({error:'アカウントが見つかりません。'},404);
         const body=await requestJson(request),action=body.action;
         if(action==='visualMode'){
-          if(!['off','chaos','chaos2','jelly'].includes(body.mode))return json({error:'モードが無効です。'},400);
+          if(!['off','chaos','chaos2','jelly','spin'].includes(body.mode))return json({error:'モードが無効です。'},400);
           await env.DB.prepare('INSERT INTO account_visual_modes(user_id,mode,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,updated_at=excluded.updated_at').bind(targetId,body.mode,Date.now()).run();
           return json({ok:true,mode:body.mode});
         }
