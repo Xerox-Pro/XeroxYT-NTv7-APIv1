@@ -27,6 +27,8 @@ test('DM consent, opaque identities, isolation, blocks, moderation, reports and 
  assert.equal((await send('/dm/'+thread.id+'/accept',bob.cookie,{})).status,200);
  assert.equal((await send('/dm/'+thread.id,alice.cookie,{text:'こんにちは'})).status,200);
  const messages=await (await send('/dm/'+thread.id,bob.cookie)).json();assert.equal(messages.messages[0].text,'こんにちは');assert.ok(!JSON.stringify(messages).includes(alice.user.id));
+ assert.equal((await (await send('/dm',alice.cookie)).json()).threads[0].lastMine,true);
+ assert.equal((await (await send('/dm',bob.cookie)).json()).threads[0].lastMine,false);
  assert.equal((await send('/dm/'+thread.id,other.cookie)).status,404);
  assert.equal((await send('/dm/'+thread.id,alice.cookie,{text:'死ね'})).status,422);
  await send('/dm/'+thread.id+'/report',bob.cookie,{reason:'迷惑な発言'});const report=(await (await send('/dm/reports',master.cookie)).json()).reports[0];assert.equal(report.body,'こんにちは');

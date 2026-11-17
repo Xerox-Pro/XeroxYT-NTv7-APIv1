@@ -17,7 +17,7 @@ export async function handleGroups(request,env,user,admin,path,moderate){
  if(user.banned||user.traffic_stopped)return reply({error:'停止中は解除申請だけ利用できます。'},403);
  if(path==='/rooms'&&method==='GET'){
   await db.prepare("INSERT OR IGNORE INTO dm_rooms(id,name,visibility,owner,created_at) VALUES('open','オープンDM','open','system',?)").bind(now).run();await db.prepare("INSERT OR IGNORE INTO dm_members(room_id,user_id,status) VALUES('open',?,'joined')").bind(user.id).run();
-  const rows=await db.prepare("SELECT r.id,r.name,r.visibility,m.status,CASE WHEN r.owner=? THEN 1 ELSE 0 END AS owned FROM dm_rooms r LEFT JOIN dm_members m ON m.room_id=r.id AND m.user_id=? WHERE r.visibility IN ('open','public') OR m.user_id=? ORDER BY r.created_at LIMIT 100").bind(user.id,user.id,user.id).all();return reply({rooms:rows.results||[]});
+  const rows=await db.prepare("SELECT r.id,r.name,r.visibility,m.status,(SELECT MAX(created_at) FROM dm_room_messages WHERE room_id=r.id) AS lastAt,(SELECT sender FROM dm_room_messages WHERE room_id=r.id ORDER BY created_at DESC,id DESC LIMIT 1)=? AS lastMine,CASE WHEN r.owner=? THEN 1 ELSE 0 END AS owned FROM dm_rooms r LEFT JOIN dm_members m ON m.room_id=r.id AND m.user_id=? WHERE r.visibility IN ('open','public') OR m.user_id=? ORDER BY r.created_at LIMIT 100").bind(user.id,user.id,user.id,user.id).all();return reply({rooms:rows.results||[]});
  }
  if(path==='/rooms'&&method==='POST'){
   const body=await requestJson(request),name=typeof body.name==='string'?body.name.trim():'';if(name.length<2||name.length>40||moderate(name)||!['public','private'].includes(body.visibility))return reply({error:'グループ名と公開範囲を確認してください。'},400);
