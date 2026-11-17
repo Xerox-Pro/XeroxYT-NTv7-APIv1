@@ -36,6 +36,8 @@ test('DM consent, opaque identities, isolation, blocks, moderation, reports and 
  assert.equal((await send('/session',alice.cookie)).status,403);
  assert.equal((await send('/dm/appeal',alice.cookie,{})).status,200);
  const appeal=(await (await send('/dm',alice.cookie)).json()).threads[0];assert.equal(appeal.kind,'appeal');
+ assert.equal(appeal.applicantId,undefined);
+ const adminAppeal=(await (await send('/dm',master.cookie)).json()).threads.find(t=>t.id===appeal.id);assert.equal(adminAppeal.applicantId,'alice');
  assert.equal((await send('/dm/'+appeal.id,alice.cookie,{text:'解除をお願いします'})).status,200);
  assert.equal((await send('/dm/'+appeal.id+'/unban',master.cookie,{})).status,200);
  assert.equal((await send('/session',alice.cookie)).status,200);

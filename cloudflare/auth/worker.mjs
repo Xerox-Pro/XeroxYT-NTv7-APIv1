@@ -1,5 +1,6 @@
 import {requestJson} from '../security/http.mjs';
 import {handleDm} from './dm.mjs';
+import {clientRelease} from './releases.mjs';
 import { randomBytes, scryptSync, createHash, timingSafeEqual } from 'node:crypto';
 
 const MAX_AGE = 60 * 60 * 24 * 30;
@@ -46,6 +47,7 @@ export default {
         if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return json({ error: '不正な形式です。' }, 415);
       }
       if (Number(request.headers.get('content-length') || 0) > 131072) return json({ error: 'データが大きすぎます。' }, 413);
+      if(path==='/client-release')return clientRelease(request,env,await currentUser(request,env.DB));
       if (request.method === 'GET' && path === '/session') {
         const user = await currentUser(request, env.DB);
         if(!user)return json({ error: 'ログインが必要です。' }, 401);
@@ -81,6 +83,11 @@ export default {
       if(path==='/dm'||path.startsWith('/dm/'))return handleDm(request,env,user,isMaster(user,env));
       if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
       if(user.traffic_stopped&&!isMaster(user,env))return json({error:'このアカウントの通信は停止されています。'},423);
+      if(path==='/admin/releases'&&request.method==='GET'){
+        if(!isMaster(user,env))return json({error:'見つかりません。'},404);
+        const latest=await env.DB.prepare("SELECT version,published_at,checked_at FROM client_releases WHERE channel='gas'").bind().first();
+        const devices=await env.DB.prepare('SELECT u.username,d.device_id,d.version,d.applied_at,d.last_seen,d.last_error FROM device_releases d JOIN users u ON u.id=d.user_id ORDER BY d.last_seen DESC LIMIT 200').bind().all();return json({latest,devices:devices.results||[]});
+      }
       if(path==='/visual-mode'&&request.method==='GET'){
         const row=await env.DB.prepare('SELECT mode FROM account_visual_modes WHERE user_id=?').bind(user.id).first();
         return json({mode:row?.mode||'off'});

@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS client_releases(channel TEXT PRIMARY KEY,version TEXT NOT NULL,manifest TEXT NOT NULL,published_at INTEGER NOT NULL,checked_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS device_releases(user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,device_id TEXT NOT NULL,version TEXT NOT NULL,applied_at INTEGER NOT NULL,last_seen INTEGER NOT NULL,last_error TEXT NOT NULL DEFAULT '',PRIMARY KEY(user_id,device_id));
