@@ -57,3 +57,4 @@ CREATE TABLE IF NOT EXISTS account_usage (
   PRIMARY KEY (user_id, day)
 );
 CREATE TABLE IF NOT EXISTS api_oauth_flows (user_id TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS user_announcement_reads(user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,announcement_id TEXT NOT NULL,read_at INTEGER NOT NULL,PRIMARY KEY(user_id,announcement_id));
