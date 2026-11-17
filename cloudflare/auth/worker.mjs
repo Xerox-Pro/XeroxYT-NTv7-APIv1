@@ -85,6 +85,7 @@ export default {
         const actual = passHash(password, user?.password_salt || '00000000000000000000000000000000');
         const expected = user?.password_hash || '0'.repeat(64);
         if (!timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex')) || !user) return json({ error: 'ユーザー名またはパスワードが違います。' }, 401);
+        if(body.termsAccepted===true&&body.termsVersion===TERMS_VERSION)await env.DB.prepare('INSERT OR IGNORE INTO user_terms_acceptances(user_id,version,accepted_at) VALUES(?,?,?)').bind(user.id,TERMS_VERSION,Date.now()).run();
         if(user.banned){const session=await startSession(env.DB,user,env);return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403,{'Set-Cookie':session.headers.get('Set-Cookie')});}
         if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
         return startSession(env.DB, user, env);
