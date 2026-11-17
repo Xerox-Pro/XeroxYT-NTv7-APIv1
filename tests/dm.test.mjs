@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import worker from '../cloudflare/auth/worker.mjs';
+import {TERMS_VERSION} from '../cloudflare/auth/terms.mjs';
 test('DM consent, opaque identities, isolation, blocks, moderation, reports and banned appeals',async()=>{
  const sqlite=new DatabaseSync(':memory:');sqlite.exec(readFileSync(new URL('../schema.sql',import.meta.url),'utf8'));
  const db={prepare(sql){return{bind(...args){return{first:async()=>sqlite.prepare(sql).get(...args)||null,run:async()=>({meta:{changes:Number(sqlite.prepare(sql).run(...args).changes)}}),all:async()=>({results:sqlite.prepare(sql).all(...args)})};}};}};
  const env={DB:db,ALLOWED_ORIGINS:'https://site.test',MASTER_USERNAME:'master'};
  const send=(path,cookie,body)=>worker.fetch(new Request('https://api.test/api/account'+path,{method:body===undefined?'GET':'POST',headers:{Origin:'https://site.test','Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})}),env);
- const register=async username=>{const response=await send('/register',null,{username,password:'a secure password 123'});return {cookie:response.headers.get('set-cookie').split(';')[0],user:(await response.json()).user};};
+ const register=async username=>{const response=await send('/register',null,{username,password:'a secure password 123',termsAccepted:true,termsVersion:TERMS_VERSION});return {cookie:response.headers.get('set-cookie').split(';')[0],user:(await response.json()).user};};
  const master=await register('master'),alice=await register('alice'),bob=await register('bob'),other=await register('other');
  for(const [i,account]of [master,alice,bob,other].entries())assert.equal((await send('/dm/profile',account.cookie,{nickname:'表示名'+i})).status,200);
  const open=(await (await send('/dm/rooms',alice.cookie)).json()).rooms.find(room=>room.id==='open');assert.equal(open.status,'joined');

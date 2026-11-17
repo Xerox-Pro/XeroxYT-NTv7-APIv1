@@ -10,6 +10,7 @@ CREATE INDEX IF NOT EXISTS dm_room_messages_page ON dm_room_messages(room_id,cre
 CREATE TABLE IF NOT EXISTS dm_room_reports(id TEXT PRIMARY KEY,room_id TEXT NOT NULL,message_id TEXT NOT NULL,reporter TEXT NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS client_releases(channel TEXT PRIMARY KEY,version TEXT NOT NULL,manifest TEXT NOT NULL,published_at INTEGER NOT NULL,checked_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS device_releases(user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,device_id TEXT NOT NULL,version TEXT NOT NULL,applied_at INTEGER NOT NULL,last_seen INTEGER NOT NULL,last_error TEXT NOT NULL DEFAULT '',PRIMARY KEY(user_id,device_id));
+CREATE TABLE IF NOT EXISTS user_terms_acceptances(user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,version TEXT NOT NULL,accepted_at INTEGER NOT NULL,PRIMARY KEY(user_id,version));
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,

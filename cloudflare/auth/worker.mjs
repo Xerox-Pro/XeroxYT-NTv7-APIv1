@@ -1,6 +1,7 @@
 import {requestJson} from '../security/http.mjs';
 import {handleDm} from './dm.mjs';
 import {clientRelease} from './releases.mjs';
+import {TERMS_VERSION,TERMS_SECTIONS,hasTerms,termsRequired} from './terms.mjs';
 import { randomBytes, scryptSync, createHash, timingSafeEqual } from 'node:crypto';
 
 const MAX_AGE = 60 * 60 * 24 * 30;
@@ -48,13 +49,21 @@ export default {
       }
       if (Number(request.headers.get('content-length') || 0) > 131072) return json({ error: 'データが大きすぎます。' }, 413);
       if(path==='/client-release')return clientRelease(request,env,await currentUser(request,env.DB));
+      if(path==='/terms'){
+        const user=await currentUser(request,env.DB);
+        if(request.method==='GET')return json({version:TERMS_VERSION,sections:TERMS_SECTIONS,accepted:user?await hasTerms(env.DB,user.id):false});
+        if(request.method!=='POST')return json({error:'未対応の操作です。'},405);
+        if(!user)return json({error:'ログインが必要です。'},401);
+        const body=await requestJson(request);if(body.accepted!==true||body.version!==TERMS_VERSION)return json({error:'現在の規約を確認し、同意してください。'},400);
+        await env.DB.prepare('INSERT OR IGNORE INTO user_terms_acceptances(user_id,version,accepted_at) VALUES(?,?,?)').bind(user.id,TERMS_VERSION,Date.now()).run();return json({ok:true,version:TERMS_VERSION});
+      }
       if (request.method === 'GET' && path === '/session') {
         const user = await currentUser(request, env.DB);
         if(!user)return json({ error: 'ログインが必要です。' }, 401);
         if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
         if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
         await recordUsage(env.DB,user,request);
-        return json({ user:publicUser(user,env) });
+        return json({ user:{...publicUser(user,env),termsAccepted:await hasTerms(env.DB,user.id)} });
       }
       if (request.method === 'POST' && (path === '/register' || path === '/login')) {
         const body = await requestJson(request);
@@ -64,10 +73,12 @@ export default {
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
         if (!(await limit(env.DB, `ip:${ip}`, 100)) || !(await limit(env.DB, `user:${username}`, 10))) return json({ error: '試行回数が多すぎます。しばらく待ってください。' }, 429);
         if (path === '/register') {
+          if(body.termsAccepted!==true||body.termsVersion!==TERMS_VERSION)return termsRequired();
           const salt = randomBytes(16).toString('hex');
           const user = { id: crypto.randomUUID(), username };
           const result = await env.DB.prepare('INSERT OR IGNORE INTO users (id, username, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)').bind(user.id, username, passHash(password, salt), salt, Date.now()).run();
           if (!result.meta.changes) return json({ error: 'そのユーザー名は使用できません。' }, 409);
+          await env.DB.prepare('INSERT INTO user_terms_acceptances(user_id,version,accepted_at) VALUES(?,?,?)').bind(user.id,TERMS_VERSION,Date.now()).run();
           return startSession(env.DB, user, env);
         }
         const user = await env.DB.prepare('SELECT users.id, users.username, users.password_hash, users.password_salt, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id WHERE users.username = ?').bind(username).first();
@@ -80,6 +91,7 @@ export default {
       }
       const user = await currentUser(request, env.DB);
       if (!user) return json({ error: 'ログインが必要です。' }, 401);
+      if(path!=='/logout'&&!await hasTerms(env.DB,user.id))return termsRequired();
       if(path==='/dm'||path.startsWith('/dm/'))return handleDm(request,env,user,isMaster(user,env));
       if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
       if(user.traffic_stopped&&!isMaster(user,env))return json({error:'このアカウントの通信は停止されています。'},423);

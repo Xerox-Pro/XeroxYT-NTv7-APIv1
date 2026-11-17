@@ -4,6 +4,7 @@ import {createHmac,timingSafeEqual,createHash} from 'node:crypto';
 import {Innertube,ClientType,Log,Constants} from 'youtubei.js/cf-worker';
 import {registerYouTubeAccount,credentialVault} from '../../youtube-account.mjs';
 import {registerMediaDownload} from './media-download.mjs';
+import {hasTerms} from '../auth/terms.mjs';
 const privatePath=path=>/^\/api\/(auth|user)(\/|$)/.test(path);
 export {privatePath};
 const signature=(value,secret)=>createHmac('sha256',secret).update('cf-private-v1:'+value).digest('base64url');
@@ -15,7 +16,7 @@ export async function privateIdentity(request,env){
  if(!hash)return null;
  const row=await env.DB.prepare('SELECT users.id,users.username,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped FROM sessions JOIN users ON users.id=sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id WHERE token_hash=? AND expires_at>?').bind(hash,Date.now()).first();
  const master=typeof env.MASTER_USERNAME==='string'&&row?.username===env.MASTER_USERNAME.trim().toLowerCase();
- return row&&!row.banned&&!row.traffic_stopped?{id:row.id,hash,admin:master}:null;
+ return row&&!row.banned&&!row.traffic_stopped&&await hasTerms(env.DB,row.id)?{id:row.id,hash,admin:master}:null;
 }
 export async function issuePrivateTicket(request,env){
  const identity=await privateIdentity(request,env);if(!identity)return Response.json({error:'ログインが必要です。'},{status:401,headers:{'Cache-Control':'no-store'}});

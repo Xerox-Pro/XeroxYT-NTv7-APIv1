@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../cloudflare/auth/worker.mjs';
+import {TERMS_VERSION} from '../cloudflare/auth/terms.mjs';
 
 test('registration, login, isolation, history and logout', async () => {
   const sqlite = new DatabaseSync(':memory:');
@@ -10,7 +11,7 @@ test('registration, login, isolation, history and logout', async () => {
   const db = { prepare(sql) { return { bind(...args) { return { async first() { return sqlite.prepare(sql).get(...args) || null; }, async run() { const r = sqlite.prepare(sql).run(...args); return { meta: { changes: Number(r.changes) } }; }, async all(){return {results:sqlite.prepare(sql).all(...args)};} }; } }; } };
   const env = { DB: db, ALLOWED_ORIGINS: 'https://example.test' };
   const send = (path, method = 'GET', data, session, origin = 'https://example.test') => worker.fetch(new Request(`https://worker.test/api/account${path}`, { method, headers: { Origin: origin, 'Content-Type': 'application/json', ...(session ? { Cookie: session } : {}) }, ...(data ? { body: JSON.stringify(data) } : {}) }), env);
-  const credentials = { username: 'alice', password: 'a secure password' };
+  const credentials = { username: 'alice', password: 'a secure password',termsAccepted:true,termsVersion:TERMS_VERSION };
   let res = await send('/register', 'POST', credentials);
   assert.equal(res.status, 200);
   const session = res.headers.get('set-cookie').split(';')[0];
@@ -20,7 +21,7 @@ test('registration, login, isolation, history and logout', async () => {
   assert.equal((await send('/history', 'PUT', { history: [], version: 0 }, session)).status, 409);
   res = await send('/history', 'GET', undefined, session);
   assert.equal((await res.json()).history[0].videoId, 'one');
-  res = await send('/register', 'POST', { username: 'bob', password: 'another password' });
+  res = await send('/register', 'POST', { username: 'bob', password: 'another password',termsAccepted:true,termsVersion:TERMS_VERSION });
   const bob = res.headers.get('set-cookie').split(';')[0];
   assert.deepEqual((await (await send('/history', 'GET', undefined, bob)).json()).history, []);
   assert.equal((await send('/logout', 'POST', {}, session, 'https://evil.test')).status, 403);
@@ -36,7 +37,7 @@ test('only Xerox0521 can manage unique accounts, usage, passwords, traffic and b
  const db={prepare(sql){return{bind(...args){return{async first(){return sqlite.prepare(sql).get(...args)||null;},async run(){const r=sqlite.prepare(sql).run(...args);return{meta:{changes:Number(r.changes)}};},async all(){return{results:sqlite.prepare(sql).all(...args)};}};}};}};
  const env={DB:db,ALLOWED_ORIGINS:'https://example.test',MASTER_USERNAME:'xerox0521'};
  const send=(path,method='GET',data,session,usagePath)=>worker.fetch(new Request(`https://worker.test/api/account${path}`,{method,headers:{Origin:'https://example.test','Content-Type':'application/json',...(session?{Cookie:session}:{}),...(usagePath?{'X-Account-Usage-Path':usagePath}:{})},...(data?{body:JSON.stringify(data)}:{})}),env);
- const register=async(username,password)=>{const response=await send('/register','POST',{username,password});return{response,session:response.headers.get('set-cookie')?.split(';')[0]};};
+ const register=async(username,password)=>{const response=await send('/register','POST',{username,password,termsAccepted:true,termsVersion:TERMS_VERSION});return{response,session:response.headers.get('set-cookie')?.split(';')[0]};};
  const master=await register('Xerox0521','master password 123');assert.equal(master.response.status,200);assert.equal((await master.response.clone().json()).user.admin,true);
  const member=await register('Member_One','member password 123');assert.equal(member.response.status,200);
  assert.equal((await register('MEMBER_ONE','different password 123')).response.status,409,'case variants must not create a duplicate identity');

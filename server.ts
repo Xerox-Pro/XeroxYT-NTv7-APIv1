@@ -382,7 +382,8 @@ async function startServer() {
       });
       if (session.status === 401) return res.status(401).json({ error: 'ログインが必要です。' });
       if (!session.ok) return res.status(503).json({ error: '認証サービスに接続できません。' });
-      const account = await session.json() as { user?: { id?: string } };
+      const account = await session.json() as { user?: { id?: string; termsAccepted?:boolean } };
+      if(account.user?.termsAccepted===false)return res.status(428).json({error:'利用規約への同意が必要です。',code:'TERMS_REQUIRED'});
       if (!account.user?.id) return res.status(401).json({ error: 'ログインが必要です。' });
       res.locals.siteAccountId = account.user.id;
       return next();
