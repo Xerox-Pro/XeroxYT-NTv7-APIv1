@@ -43,6 +43,15 @@ test('only Xerox0521 can manage unique accounts, usage, passwords, traffic and b
  await send('/session','GET',undefined,member.session,'/api/video/abcdefghijk');
  let list=await (await send('/admin/accounts','GET',undefined,master.session)).json();const row=list.accounts.find(item=>item.username==='member_one');assert.equal(row.requests,1);assert.equal(row.videos,1);
  assert.equal((await send('/admin/accounts','GET',undefined,member.session)).status,404);
+ assert.equal((await (await send('/visual-mode','GET',undefined,member.session)).json()).mode,'off');
+ assert.equal((await send('/admin/accounts/'+row.id,'POST',{action:'visualMode',mode:'chaos'},member.session)).status,404);
+ assert.equal((await send('/admin/accounts/'+row.id,'POST',{action:'visualMode',mode:'invalid'},master.session)).status,400);
+ for(const mode of ['chaos','chaos2','jelly','off']){
+  assert.equal((await send('/admin/accounts/'+row.id,'POST',{action:'visualMode',mode},master.session)).status,200);
+  assert.equal((await (await send('/visual-mode','GET',undefined,member.session)).json()).mode,mode);
+  assert.equal((await (await send('/visual-mode','GET',undefined,master.session)).json()).mode,'off','mode changes must be isolated to the selected user');
+  const updated=await (await send('/admin/accounts','GET',undefined,master.session)).json();assert.equal(updated.accounts.find(item=>item.id===row.id).visual_mode,mode);
+ }
  assert.equal((await send('/admin/accounts/'+row.id,'POST',{action:'traffic',enabled:true},master.session)).status,200);assert.equal((await send('/login','POST',{username:'member_one',password:'member password 123'})).status,423);
  await send('/admin/accounts/'+row.id,'POST',{action:'traffic',enabled:false},master.session);
  await send('/admin/accounts/'+row.id,'POST',{action:'resetPassword',password:'replacement password 123'},master.session);assert.equal((await send('/login','POST',{username:'member_one',password:'member password 123'})).status,401);const activeLogin=await send('/login','POST',{username:'member_one',password:'replacement password 123'});assert.equal(activeLogin.status,200);const activeSession=activeLogin.headers.get('set-cookie').split(';')[0];

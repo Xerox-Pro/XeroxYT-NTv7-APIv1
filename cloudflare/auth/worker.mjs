@@ -79,19 +79,31 @@ export default {
       if (!user) return json({ error: 'ログインが必要です。' }, 401);
       if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
       if(user.traffic_stopped&&!isMaster(user,env))return json({error:'このアカウントの通信は停止されています。'},423);
+      if(path==='/visual-mode'&&request.method==='GET'){
+        const row=await env.DB.prepare('SELECT mode FROM account_visual_modes WHERE user_id=?').bind(user.id).first();
+        return json({mode:row?.mode||'off'});
+      }
       if(path==='/admin/accounts'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         const result=await env.DB.prepare("SELECT users.id,users.username,users.created_at,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped,COALESCE(SUM(account_usage.requests),0) AS requests,COALESCE(SUM(account_usage.videos),0) AS videos,COALESCE(SUM(account_usage.searches),0) AS searches,MAX(account_usage.last_seen) AS last_seen FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_usage ON account_usage.user_id=users.id GROUP BY users.id ORDER BY users.created_at DESC").bind().all();
-        return json({accounts:result.results||[]});
+        const modes=await env.DB.prepare('SELECT user_id,mode FROM account_visual_modes').bind().all();
+        const byId=new Map((modes.results||[]).map(row=>[row.user_id,row.mode]));
+        return json({accounts:(result.results||[]).map(row=>({...row,visual_mode:byId.get(row.id)||'off'}))});
       }
       const adminMatch=/^\/admin\/accounts\/([0-9a-f-]{36})$/.exec(path);
       if(adminMatch&&request.method==='POST'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         const targetId=adminMatch[1],target=await env.DB.prepare('SELECT id,username FROM users WHERE id=?').bind(targetId).first();
         if(!target)return json({error:'アカウントが見つかりません。'},404);
-        if(isMaster(target,env))return json({error:'管理アカウント自身は変更できません。'},400);
         const body=await requestJson(request),action=body.action;
+        if(action==='visualMode'){
+          if(!['off','chaos','chaos2','jelly'].includes(body.mode))return json({error:'モードが無効です。'},400);
+          await env.DB.prepare('INSERT INTO account_visual_modes(user_id,mode,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,updated_at=excluded.updated_at').bind(targetId,body.mode,Date.now()).run();
+          return json({ok:true,mode:body.mode});
+        }
+        if(isMaster(target,env))return json({error:'管理アカウント自身は変更できません。'},400);
         if(action==='delete'){
+          await env.DB.prepare('DELETE FROM account_visual_modes WHERE user_id=?').bind(targetId).run();
           for(const [sql,args] of [['DELETE FROM api_oauth_flows WHERE user_id LIKE ?',[`%:${targetId}%`]],['DELETE FROM account_usage WHERE user_id=?',[targetId]],['DELETE FROM account_controls WHERE user_id=?',[targetId]],['DELETE FROM history WHERE user_id=?',[targetId]],['DELETE FROM sessions WHERE user_id=?',[targetId]],['DELETE FROM users WHERE id=?',[targetId]]])await env.DB.prepare(sql).bind(...args).run();
           return json({ok:true});
         }

@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS login_attempts (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_username_nocase ON users(LOWER(username));
+CREATE TABLE IF NOT EXISTS account_visual_modes (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL DEFAULT 'off' CHECK (mode IN ('off','chaos','chaos2','jelly')),
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS account_controls (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   banned INTEGER NOT NULL DEFAULT 0,
