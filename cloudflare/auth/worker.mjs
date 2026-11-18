@@ -1,7 +1,6 @@
 import {requestJson} from '../security/http.mjs';
 import {handleDm} from './dm.mjs';
 import {clientRelease} from './releases.mjs';
-import {announcements} from './announcements.mjs';
 import {TERMS_VERSION,TERMS_SECTIONS,hasTerms,termsRequired} from './terms.mjs';
 import { randomBytes, scryptSync, createHash, timingSafeEqual } from 'node:crypto';
 
@@ -97,19 +96,6 @@ export default {
       if(path==='/dm'||path.startsWith('/dm/'))return handleDm(request,env,user,isMaster(user,env));
       if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
       if(user.traffic_stopped&&!isMaster(user,env))return json({error:'このアカウントの通信は停止されています。'},423);
-      if(path==='/announcements'&&request.method==='GET'){
-        const result=await env.DB.prepare('SELECT announcement_id,read_at FROM user_announcement_reads WHERE user_id=?').bind(user.id).all();
-        const reads=new Map((result.results||[]).map(row=>[row.announcement_id,row.read_at]));
-        return json({announcements:announcements.map(item=>({...item,readAt:reads.get(item.id)||null}))});
-      }
-      if(path==='/announcements/read'&&request.method==='POST'){
-        const body=await requestJson(request);
-        if(!announcements.some(item=>item.id===body.id))return json({error:'お知らせが見つかりません。'},404);
-        const now=Date.now();
-        await env.DB.prepare('INSERT OR IGNORE INTO user_announcement_reads(user_id,announcement_id,read_at) VALUES(?,?,?)').bind(user.id,body.id,now).run();
-        const row=await env.DB.prepare('SELECT read_at FROM user_announcement_reads WHERE user_id=? AND announcement_id=?').bind(user.id,body.id).first();
-        return json({readAt:row.read_at});
-      }
       if(path==='/admin/releases'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         const latest=await env.DB.prepare("SELECT version,published_at,checked_at FROM client_releases WHERE channel='gas'").bind().first();
@@ -133,7 +119,7 @@ export default {
         if(!target)return json({error:'アカウントが見つかりません。'},404);
         const body=await requestJson(request),action=body.action;
         if(action==='visualMode'){
-          if(!['off','chaos','chaos2','jelly','spin'].includes(body.mode))return json({error:'モードが無効です。'},400);
+          if(!['off','chaos','chaos2','jelly'].includes(body.mode))return json({error:'モードが無効です。'},400);
           await env.DB.prepare('INSERT INTO account_visual_modes(user_id,mode,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,updated_at=excluded.updated_at').bind(targetId,body.mode,Date.now()).run();
           return json({ok:true,mode:body.mode});
         }

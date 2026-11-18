@@ -47,7 +47,7 @@ test('only Xerox0521 can manage unique accounts, usage, passwords, traffic and b
  assert.equal((await (await send('/visual-mode','GET',undefined,member.session)).json()).mode,'off');
  assert.equal((await send('/admin/accounts/'+row.id,'POST',{action:'visualMode',mode:'chaos'},member.session)).status,404);
  assert.equal((await send('/admin/accounts/'+row.id,'POST',{action:'visualMode',mode:'invalid'},master.session)).status,400);
- for(const mode of ['chaos','chaos2','jelly','spin','off']){
+ for(const mode of ['chaos','chaos2','jelly','off']){
   assert.equal((await send('/admin/accounts/'+row.id,'POST',{action:'visualMode',mode},master.session)).status,200);
   assert.equal((await (await send('/visual-mode','GET',undefined,member.session)).json()).mode,mode);
   assert.equal((await (await send('/visual-mode','GET',undefined,master.session)).json()).mode,'off','mode changes must be isolated to the selected user');
