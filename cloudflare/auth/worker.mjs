@@ -146,6 +146,8 @@ export default {
           return json({ok:true,mode:body.mode});
         }
         if(action==='master'){
+          // A delegated master may manage other accounts, but only Xerox0521 can create new masters.
+          if(body.enabled===true&&!isOwner(user))return json({error:'マスター権限の付与はXerox0521のみ実行できます。'},403);
           if(target.id===user.id||isOwner(target))return json({error:'オーナーまたは自分自身の管理権限は変更できません。'},403);
           if(isOwner(target)||target.username===String(env.MASTER_USERNAME||'').trim().toLowerCase())return json({error:'初期マスターの権限は変更できません。'},400);
           if(body.enabled===true)await env.DB.prepare('INSERT OR IGNORE INTO account_master_grants(user_id,granted_by,granted_at) VALUES(?,?,?)').bind(targetId,user.id,Date.now()).run();
