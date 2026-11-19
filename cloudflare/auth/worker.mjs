@@ -15,9 +15,9 @@ const validPass = password => typeof password === 'string' && password.length >=
 async function currentUser(request, db) {
   const token = /(?:^|;\s*)__Host-xy_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get('Cookie') || '')?.[1];
   if (!token) return null;
-  return db.prepare('SELECT users.id, users.username, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(hash(token), Date.now()).first();
+  return db.prepare('SELECT users.id, users.username, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(hash(token), Date.now()).first();
 }
-const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&user.username===env.MASTER_USERNAME.trim().toLowerCase();
+const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&(user.username===env.MASTER_USERNAME.trim().toLowerCase()||user.master_granted===1);
 const publicUser = (user,env) => ({id:user.id,username:user.username,...(isMaster(user,env)?{admin:true}:{})});
 const usageDay = now => new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0,10);
 async function recordUsage(db,user,request){
@@ -81,7 +81,7 @@ export default {
           await env.DB.prepare('INSERT INTO user_terms_acceptances(user_id,version,accepted_at) VALUES(?,?,?)').bind(user.id,TERMS_VERSION,Date.now()).run();
           return startSession(env.DB, user, env);
         }
-        const user = await env.DB.prepare('SELECT users.id, users.username, users.password_hash, users.password_salt, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id WHERE users.username = ?').bind(username).first();
+        const user = await env.DB.prepare('SELECT users.id, users.username, users.password_hash, users.password_salt, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE users.username = ?').bind(username).first();
         const actual = passHash(password, user?.password_salt || '00000000000000000000000000000000');
         const expected = user?.password_hash || '0'.repeat(64);
         if (!timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex')) || !user) return json({ error: 'ユーザー名またはパスワードが違います。' }, 401);
@@ -107,25 +107,34 @@ export default {
       }
       if(path==='/admin/accounts'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
-        const result=await env.DB.prepare("SELECT users.id,users.username,users.created_at,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped,COALESCE(SUM(account_usage.requests),0) AS requests,COALESCE(SUM(account_usage.videos),0) AS videos,COALESCE(SUM(account_usage.searches),0) AS searches,MAX(account_usage.last_seen) AS last_seen FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_usage ON account_usage.user_id=users.id GROUP BY users.id ORDER BY users.created_at DESC").bind().all();
+        const result=await env.DB.prepare("SELECT users.id,users.username,users.created_at,CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped,COALESCE(SUM(account_usage.requests),0) AS requests,COALESCE(SUM(account_usage.videos),0) AS videos,COALESCE(SUM(account_usage.searches),0) AS searches,MAX(account_usage.last_seen) AS last_seen FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id LEFT JOIN account_usage ON account_usage.user_id=users.id GROUP BY users.id ORDER BY users.created_at DESC").bind().all();
         const modes=await env.DB.prepare('SELECT user_id,mode FROM account_visual_modes').bind().all();
         const byId=new Map((modes.results||[]).map(row=>[row.user_id,row.mode]));
-        return json({accounts:(result.results||[]).map(row=>({...row,visual_mode:byId.get(row.id)||'off'}))});
+        return json({accounts:(result.results||[]).map(row=>({...row,is_master:isMaster(row,env),visual_mode:byId.get(row.id)||'off'}))});
       }
       const adminMatch=/^\/admin\/accounts\/([0-9a-f-]{36})$/.exec(path);
       if(adminMatch&&request.method==='POST'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
-        const targetId=adminMatch[1],target=await env.DB.prepare('SELECT id,username FROM users WHERE id=?').bind(targetId).first();
+        const targetId=adminMatch[1],target=await env.DB.prepare('SELECT users.id,users.username,CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM users LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE users.id=?').bind(targetId).first();
         if(!target)return json({error:'アカウントが見つかりません。'},404);
         const body=await requestJson(request),action=body.action;
         if(action==='visualMode'){
-          if(!['off','chaos','chaos2','jelly'].includes(body.mode))return json({error:'モードが無効です。'},400);
+          if(!['off','chaos','chaos2','jelly','spin','quake','zero','mirror'].includes(body.mode))return json({error:'モードが無効です。'},400);
           await env.DB.prepare('INSERT INTO account_visual_modes(user_id,mode,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,updated_at=excluded.updated_at').bind(targetId,body.mode,Date.now()).run();
           return json({ok:true,mode:body.mode});
+        }
+        if(action==='master'){
+          if(target.id===user.id)return json({error:'自分自身の管理権限は変更できません。'},400);
+          if(target.username===String(env.MASTER_USERNAME||'').trim().toLowerCase())return json({error:'初期マスターの権限は変更できません。'},400);
+          if(body.enabled===true)await env.DB.prepare('INSERT OR IGNORE INTO account_master_grants(user_id,granted_by,granted_at) VALUES(?,?,?)').bind(targetId,user.id,Date.now()).run();
+          else if(body.enabled===false)await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=?').bind(targetId).run();
+          else return json({error:'権限設定が無効です。'},400);
+          return json({ok:true,isMaster:body.enabled});
         }
         if(isMaster(target,env))return json({error:'管理アカウント自身は変更できません。'},400);
         if(action==='delete'){
           await env.DB.prepare('DELETE FROM account_visual_modes WHERE user_id=?').bind(targetId).run();
+          await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=? OR granted_by=?').bind(targetId,targetId).run();
           for(const [sql,args] of [['DELETE FROM api_oauth_flows WHERE user_id LIKE ?',[`%:${targetId}%`]],['DELETE FROM account_usage WHERE user_id=?',[targetId]],['DELETE FROM account_controls WHERE user_id=?',[targetId]],['DELETE FROM history WHERE user_id=?',[targetId]],['DELETE FROM sessions WHERE user_id=?',[targetId]],['DELETE FROM users WHERE id=?',[targetId]]])await env.DB.prepare(sql).bind(...args).run();
           return json({ok:true});
         }
