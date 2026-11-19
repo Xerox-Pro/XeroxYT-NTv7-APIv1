@@ -17,6 +17,7 @@ async function currentUser(request, db) {
   if (!token) return null;
   return db.prepare('SELECT users.id, users.username, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(hash(token), Date.now()).first();
 }
+const isOwner = user => user?.username?.toLowerCase() === 'xerox0521';
 const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&(user.username===env.MASTER_USERNAME.trim().toLowerCase()||user.master_granted===1);
 const publicUser = (user,env) => ({id:user.id,username:user.username,...(isMaster(user,env)?{admin:true}:{})});
 const usageDay = now => new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0,10);
@@ -105,6 +106,26 @@ export default {
         const row=await env.DB.prepare('SELECT mode FROM account_visual_modes WHERE user_id=?').bind(user.id).first();
         return json({mode:row?.mode||'off'});
       }
+      if(path==='/telemetry'&&request.method==='POST'){
+        const auth=request.headers.get('authorization')||'';
+        if(!env.API_SHARED_SECRET||auth!=='Bearer '+env.API_SHARED_SECRET)return json({error:'許可されていません。'},403);
+        const body=await requestJson(request);
+        const route=typeof body.route==='string'&&/^\\/api\\/[a-z0-9/:_-]{1,90}$/.test(body.route)?body.route:null;
+        const method=typeof body.method==='string'&&['GET','POST','PUT','PATCH','DELETE','HEAD'].includes(body.method)?body.method:null;
+        if(!route||!method||!Number.isInteger(body.status)||body.status<100||body.status>599||!Number.isFinite(body.durationMs))return json({error:'ログ形式が不正です。'},400);
+        const now=Date.now();
+        await env.DB.prepare('INSERT INTO account_request_logs(user_id,at,route,method,status,duration_ms) VALUES(?,?,?,?,?,?)').bind(user.id,now,route,method,body.status,Math.max(0,Math.min(60000,Math.round(body.durationMs)))).run();
+        if(Math.random()<0.02)await env.DB.prepare('DELETE FROM account_request_logs WHERE at<?').bind(now-7*86400000).run();
+        return json({ok:true});
+      }
+      if(path==='/admin/logs'&&request.method==='GET'){
+        if(!isMaster(user,env))return json({error:'見つかりません。'},404);
+        const targetId=url.searchParams.get('userId')||'';
+        if(!/^[0-9a-f-]{36}$/.test(targetId))return json({error:'ユーザー指定が不正です。'},400);
+        const after=Math.max(0,Math.min(Number(url.searchParams.get('after')||0)||0,Date.now()));
+        const result=await env.DB.prepare('SELECT id,at,route,method,status,duration_ms FROM account_request_logs WHERE user_id=? AND id>? ORDER BY id ASC LIMIT 150').bind(targetId,Math.floor(after)).all();
+        return json({logs:result.results||[],nextAfter:result.results?.at(-1)?.id||Math.floor(after)});
+      }
       if(path==='/admin/accounts'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         const result=await env.DB.prepare("SELECT users.id,users.username,users.created_at,CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped,COALESCE(SUM(account_usage.requests),0) AS requests,COALESCE(SUM(account_usage.videos),0) AS videos,COALESCE(SUM(account_usage.searches),0) AS searches,MAX(account_usage.last_seen) AS last_seen FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id LEFT JOIN account_usage ON account_usage.user_id=users.id GROUP BY users.id ORDER BY users.created_at DESC").bind().all();
@@ -119,19 +140,20 @@ export default {
         if(!target)return json({error:'アカウントが見つかりません。'},404);
         const body=await requestJson(request),action=body.action;
         if(action==='visualMode'){
+          if(isOwner(target))return json({error:'オーナーアカウントのモードは変更できません。'},403);
           if(!['off','chaos','chaos2','jelly','spin','quake','zero','mirror'].includes(body.mode))return json({error:'モードが無効です。'},400);
           await env.DB.prepare('INSERT INTO account_visual_modes(user_id,mode,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,updated_at=excluded.updated_at').bind(targetId,body.mode,Date.now()).run();
           return json({ok:true,mode:body.mode});
         }
         if(action==='master'){
-          if(target.id===user.id)return json({error:'自分自身の管理権限は変更できません。'},400);
+          if(target.id===user.id||isOwner(target))return json({error:'オーナーまたは自分自身の管理権限は変更できません。'},403);
           if(target.username===String(env.MASTER_USERNAME||'').trim().toLowerCase())return json({error:'初期マスターの権限は変更できません。'},400);
           if(body.enabled===true)await env.DB.prepare('INSERT OR IGNORE INTO account_master_grants(user_id,granted_by,granted_at) VALUES(?,?,?)').bind(targetId,user.id,Date.now()).run();
           else if(body.enabled===false)await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=?').bind(targetId).run();
           else return json({error:'権限設定が無効です。'},400);
           return json({ok:true,isMaster:body.enabled});
         }
-        if(isMaster(target,env))return json({error:'管理アカウント自身は変更できません。'},400);
+        if(isMaster(target,env)||isOwner(target))return json({error:'保護対象のアカウントは変更できません。'},403);
         if(action==='delete'){
           await env.DB.prepare('DELETE FROM account_visual_modes WHERE user_id=?').bind(targetId).run();
           await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=? OR granted_by=?').bind(targetId,targetId).run();
