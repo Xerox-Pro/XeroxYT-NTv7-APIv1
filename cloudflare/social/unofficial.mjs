@@ -11,14 +11,27 @@ function igItem(media){if(!media?.pk||!media.code||!media.user)return null;retur
 export async function privateFeed(service,link,cursor,fetcher){if(cursor.length>2000)throw fail('CURSOR','続きの情報が無効です。',400);if(service==='instagram'){const data=await jsonCall(fetcher,'https://www.instagram.com/api/v1/feed/timeline/',link,service,{count:'12',...(cursor?{max_id:cursor}:{}),_csrftoken:link.cookies.csrftoken,is_pull_to_refresh:cursor?'0':'1'});if(!Array.isArray(data.feed_items)&&!Array.isArray(data.items))throw fail('PROVIDER_RESPONSE','Instagramのフィード形式に対応できませんでした。');const items=(data.feed_items||data.items).flatMap(row=>{if(row.is_ad||row.media_or_ad?.is_ad)return [];const media=row.media_or_ad||row.media||row;const item=igItem(media);return item?[item]:[];});return {items,cursor:data.more_available?String(data.next_max_id||''):'',source:'unofficial-account-feed'};}
  return tiktokFeed(link,cursor,fetcher,false);}
 const ttParams=link=>({aid:'1988',app_name:'tiktok_web',device_platform:'web_pc',device_id:link.deviceId||'',isNonPersonalized:'false',...(link.cookies.msToken?{msToken:link.cookies.msToken}:{})});
-function tiktokItems(rows){return rows.filter(row=>/^\d{10,25}$/.test(row.id||row.aweme_id||'')&&(row.author?.uniqueId||row.author?.unique_id)).map(row=>{const author=row.author.uniqueId||row.author.unique_id;return {id:'tt:'+(row.id||row.aweme_id),service:'tiktok',title:row.desc||'',kind:'video',author,profileUsername:author,authorId:String(row.author.id||row.author.uid||''),thumbnail:row.video?.cover?.url_list?.[0]||row.video?.cover||'',url:`https://www.tiktok.com/@${encodeURIComponent(author)}/video/${row.id||row.aweme_id}`,timestamp:Number(row.createTime||row.create_time||0)*1000,liked:!!row.digged,likeCount:Number(row.stats?.diggCount||row.statistics?.digg_count||0),commentCount:Number(row.stats?.commentCount||row.statistics?.comment_count||0)};});}
+// Prefer the direct progressive video URL from authenticated TikTok feeds.
+// Restrict hosts to known video CDNs and never attach login cookies to <video>.
+function tiktokVideoUrl(value){
+ const strings=typeof value==='string'?[value]:Array.isArray(value)?value:[value?.url_list?.[0],value?.urlList?.[0],value?.url,value?.src];
+ for(const candidate of strings){
+  if(typeof candidate!=='string'||candidate.length>6000)continue;
+  try{const url=new URL(candidate),host=url.hostname.toLowerCase();if(url.protocol==='https:'&&['tiktokcdn.com','tiktokv.com','byteoversea.com','ibytedtos.com','muscdn.com','tiktokcdn-us.com','tiktok.com','byteimg.com','tik-tokcdn.com'].some(root=>host===root||host.endsWith('.'+root)))return url.href;}catch{}
+ }
+ return '';
+}
+function tiktokItems(rows){return rows.filter(row=>/^\d{10,25}$/.test(row.id||row.aweme_id||'')&&(row.author?.uniqueId||row.author?.unique_id)).map(row=>{
+ const author=row.author.uniqueId||row.author.unique_id,video=row.video||{};
+ return {id:'tt:'+(row.id||row.aweme_id),service:'tiktok',title:row.desc||'',kind:'video',author,profileUsername:author,authorId:String(row.author.id||row.author.uid||''),media:tiktokVideoUrl(video.playAddr)||tiktokVideoUrl(video.play_addr)||tiktokVideoUrl(video.downloadAddr)||tiktokVideoUrl(video.download_addr)||'',thumbnail:tiktokVideoUrl(video.cover)||tiktokVideoUrl(video.originCover)||'',duration:Number(video.duration||0),url:`https://www.tiktok.com/@${encodeURIComponent(author)}/video/${row.id||row.aweme_id}`,timestamp:Number(row.createTime||row.create_time||0)*1000,liked:!!row.digged,likeCount:Number(row.stats?.diggCount||row.statistics?.digg_count||0),commentCount:Number(row.stats?.commentCount||row.statistics?.comment_count||0)};
+});}
 async function tiktokFeed(link,cursor,fetcher,following){
  if(cursor&&!(/^(?:fyp:)?\d{1,20}$/.test(cursor)))throw fail('CURSOR','続きの情報が無効です。',400);
- const query=new URLSearchParams({...ttParams(link),count:following?'9':'12',from_page:following?'following':'fyp',...(following?{cursor:cursor||'0',pullType:'1',level:'1',isResetCounterUsed:'true'}:{pull_type:'0',coverFormat:'2'})});
+ const query=new URLSearchParams({...ttParams(link),count:following?'9':'12',from_page:following?'following':'fyp',...(following?{cursor:cursor||'0',pullType:'1',level:'1',isResetCounterUsed:'true'}:{itemID:cursor||'',pullType:cursor?'2':'1',coverFormat:'2',video_encoding:'dash'})});
  const data=await jsonCall(fetcher,'https://www.tiktok.com/api/'+(following?'following':'recommend')+'/item_list/?'+query,link,'tiktok');
  const rows=data.itemList||data.item_list;if(!Array.isArray(rows))throw fail('PROVIDER_RESPONSE','TikTokのフィードを取得できませんでした。公式サービスで接続状態を確認してください。',403);
  const items=tiktokItems(rows),hasMore=!!(data.hasMore??data.has_more);
- return {items,cursor:hasMore&&items.length?(following?String(data.cursor||data.maxCursor||''):'fyp:'+(Number(cursor.replace('fyp:','')||0)+1)):'',source:following?'unofficial-following-feed':'unofficial-account-feed'};
+ return {items,cursor:hasMore&&items.length?String(data.cursor||data.maxCursor||''):'',source:following?'unofficial-following-feed':'unofficial-account-feed'};
 }
 export async function privateFollowing(service,link,cursor,fetcher){if(service!=='tiktok')throw fail('CAPABILITY_UNAVAILABLE','このフィードには対応していません。',501);return tiktokFeed(link,cursor,fetcher,true);}
 // TikTok IM wire layouts: researched from etrnkz/tiktok-unofficial-api (MIT), see docs/social-protocols.md.
