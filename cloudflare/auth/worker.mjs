@@ -191,7 +191,7 @@ export default {
           // Keep a banned account's session only so every device can receive the
           // explicit BAN response and persist its lock screen. All account data
           // routes remain blocked above. Traffic stops still revoke sessions.
-          if(enabled&&action==='traffic')await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();
+          if(enabled&&action==='traffic'){try{await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();}catch(error){console.warn('Traffic session cleanup failed:',error instanceof Error?error.message:'unknown');}}
           return json({ok:true});
         }
         return json({error:'操作が不正です。'},400);
