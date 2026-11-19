@@ -12,7 +12,7 @@ export function withGasAccess(worker){
  return {...worker,async fetch(request,env,ctx){
   let gasAuthenticated=false;
   const supplied=(request.headers.get('Authorization')||'').replace(/^Bearer /,'');
-  if(typeof env.GAS_API_SHARED_SECRET==='string'&&env.GAS_API_SHARED_SECRET&&await matches(supplied,env.GAS_API_SHARED_SECRET)){
+  if(request.headers.get('Origin')==='https://script.google.com'&&typeof env.GAS_API_SHARED_SECRET==='string'&&env.GAS_API_SHARED_SECRET&&await matches(supplied,env.GAS_API_SHARED_SECRET)){
    const origin=String(env.ALLOWED_ORIGINS||'').split(',').map(value=>value.trim()).find(value=>/^https:\/\/[^/]+$/.test(value));
    if(request.headers.get('Origin')!=='https://script.google.com'||!origin||!env.API_SHARED_SECRET){
     return Response.json({error:'GAS access is not configured.'},{status:403});

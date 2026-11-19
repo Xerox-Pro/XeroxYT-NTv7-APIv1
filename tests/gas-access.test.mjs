@@ -14,3 +14,16 @@ test('GAS key is accepted only from Apps Script and translated server-side',asyn
  assert.equal(rejected.status,403);
  assert.equal(seen.length,1);
 });
+
+
+test('Vercel origins are not mistaken for GAS even if the credentials coincide',async()=>{
+ const seen=[];
+ const worker=withGasAccess({async fetch(request){seen.push(request);return Response.json({ok:true});}});
+ const env={GAS_API_SHARED_SECRET:'shared-key',API_SHARED_SECRET:'shared-key',ALLOWED_ORIGINS:'https://xeroxyt-ntv7-xerox14.vercel.app'};
+ const request=new Request('https://api.test/api/account/session',{headers:{Authorization:'Bearer shared-key',Origin:'https://xeroxyt-ntv7-xerox14.vercel.app'}});
+ const response=await worker.fetch(request,env,{});
+ assert.equal(response.status,200);
+ assert.equal(seen.length,1);
+ assert.equal(seen[0].headers.get('origin'),'https://xeroxyt-ntv7-xerox14.vercel.app');
+ assert.equal(seen[0].headers.get('authorization'),'Bearer shared-key');
+});
