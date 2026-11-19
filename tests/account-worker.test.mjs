@@ -30,6 +30,7 @@ test('registration, login, isolation, history and logout', async () => {
   assert.match(session, /^__Host-xy_session=/);
   assert.equal((await send('/history', 'GET')).status, 401);
   assert.equal((await send('/history', 'PUT', { history: [{videoId: 'one'}], version: 0 }, session)).status, 200);
+  assert.equal((await (await send('/session','GET',undefined,session)).json()).historyVersion,1,'session exposes history version without a separate history GET');
   assert.equal((await send('/history', 'PUT', { history: [], version: 0 }, session)).status, 409);
   res = await send('/history', 'GET', undefined, session);
   assert.equal((await res.json()).history[0].videoId, 'one');
