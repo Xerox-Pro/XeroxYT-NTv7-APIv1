@@ -98,7 +98,18 @@ test('only Xerox0521 may grant master access, even when caller is already a mast
  assert.match((await denied.json()).error,/Xerox0521/);
  let accounts=await (await send('/admin/accounts','GET',undefined,owner)).json();
  assert.equal(accounts.accounts.find(row=>row.id===memberId).is_master,false);
+ // Cross-master recovery: the actor who imposed the restriction is irrelevant.
+ assert.equal((await send(path(memberId),'POST',{action:'ban',enabled:true},delegate)).status,200);
+ assert.equal((await send(path(memberId),'POST',{action:'ban',enabled:false},owner)).status,200,'owner can undo a delegated master BAN');
+ assert.equal((await send(path(memberId),'POST',{action:'ban',enabled:true},owner)).status,200);
+ assert.equal((await send(path(memberId),'POST',{action:'ban',enabled:false},delegate)).status,200,'delegated master can undo owner BAN');
+ // Even if a previously banned user later becomes master, recovery must remain possible.
+ assert.equal((await send(path(memberId),'POST',{action:'ban',enabled:true},delegate)).status,200);
+ assert.equal((await send(path(memberId),'POST',{action:'traffic',enabled:true},delegate)).status,200);
  assert.equal((await send(path(memberId),'POST',{action:'master',enabled:true},owner)).status,200);
+ assert.equal((await send(path(memberId),'POST',{action:'ban',enabled:false},delegate)).status,200,'any master can unban a master account');
+ assert.equal((await send(path(memberId),'POST',{action:'traffic',enabled:false},delegate)).status,200,'any master can restore a master account');
+ assert.equal((await send(path(memberId),'POST',{action:'ban',enabled:true},delegate)).status,403,'other masters remain protected from new bans');
  accounts=await (await send('/admin/accounts','GET',undefined,owner)).json();
  assert.equal(accounts.accounts.find(row=>row.id===memberId).is_master,true);
  assert.equal((await send(path(memberId),'POST',{action:'master',enabled:false},delegate)).status,200,'existing delegated revoke permissions remain unchanged');
