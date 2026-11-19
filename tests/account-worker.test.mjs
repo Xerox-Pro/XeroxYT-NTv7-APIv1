@@ -8,7 +8,7 @@ import {TERMS_VERSION} from '../cloudflare/auth/terms.mjs';
 function createTestDb(){
  const sqlite=new DatabaseSync(':memory:');
  sqlite.exec(readFileSync(new URL('../cloudflare/auth/schema.sql',import.meta.url),'utf8'));
- for(const name of ['2026-11-17-visual-modes.sql','2026-11-19-master-grants.sql','2026-11-19-request-logs.sql','2026-11-19-account-presence.sql','2026-11-19-system-logs.sql']){
+ for(const name of ['2026-11-17-visual-modes.sql','2026-11-19-master-grants.sql','2026-11-19-request-logs.sql','2026-11-19-account-presence.sql','2026-11-19-presence-page.sql','2026-11-19-system-logs.sql','2026-11-19-system-monitor-settings.sql']){
   sqlite.exec(readFileSync(new URL('../cloudflare/auth/migrations/'+name,import.meta.url),'utf8'));
  }
  sqlite.exec(`
@@ -164,5 +164,26 @@ test('system-wide request logs are master-only, recent and filterable',async()=>
  assert.equal((await (await send('/admin/system-logs?userId='+memberId,'GET',undefined,owner)).json()).logs.length,1);
  assert.equal((await (await send('/admin/system-logs?errors=1','GET',undefined,owner)).json()).logs.length,1);
  assert.equal((await (await send('/admin/system-logs?after='+data.nextAfter,'GET',undefined,owner)).json()).logs.length,0);
+ sqlite.close();
+});
+
+test('system monitor is off by default, master-only, and can be toggled without BAN polling',async()=>{
+ const sqlite=createTestDb();
+ const db={prepare(sql){return{bind(...args){return{async first(){return sqlite.prepare(sql).get(...args)||null;},async run(){const r=sqlite.prepare(sql).run(...args);return{meta:{changes:Number(r.changes)}};},async all(){return{results:sqlite.prepare(sql).all(...args)};}};}};}};
+ const env={DB:db,ALLOWED_ORIGINS:'https://example.test',MASTER_USERNAME:'xerox0521'};
+ const send=(path,method='GET',data,session)=>worker.fetch(new Request('https://worker.test/api/account'+path,{method,headers:{Origin:'https://example.test','Content-Type':'application/json',...(session?{Cookie:session}:{})},...(data?{body:JSON.stringify(data)}:{})}),env);
+ const register=async username=>{
+  const response=await send('/register','POST',{username,password:'secure test password 123',termsAccepted:true,termsVersion:TERMS_VERSION});
+  assert.equal(response.status,200);return response.headers.get('set-cookie').split(';')[0];
+ };
+ const owner=await register('Xerox0521'),member=await register('monitor_member');
+ assert.equal((await send('/admin/system-monitor','GET',undefined,member)).status,404);
+ assert.equal((await send('/admin/system-monitor','POST',{enabled:true},member)).status,404);
+ assert.equal((await (await send('/admin/system-monitor','GET',undefined,owner)).json()).enabled,false);
+ assert.equal((await send('/admin/system-monitor','POST',{enabled:'true'},owner)).status,400);
+ assert.equal((await (await send('/admin/system-monitor','POST',{enabled:true},owner)).json()).enabled,true);
+ assert.equal((await (await send('/admin/system-monitor','GET',undefined,owner)).json()).enabled,true);
+ assert.equal((await (await send('/admin/system-monitor','POST',{enabled:false},owner)).json()).enabled,false);
+ assert.equal((await send('/ban-status','GET',undefined,member)).status,404);
  sqlite.close();
 });
