@@ -21,7 +21,13 @@ async function getJson(fetcher,route,params,cookies){
  const url=new URL(route,origin);
  for(const [key,value] of Object.entries(params))url.searchParams.set(key,String(value));
  const response=await fetcher(url.href,{method:'GET',headers:headers(cookies),redirect:'manual',signal:AbortSignal.timeout(11000)});
- if(!response.ok||response.status>=300&&response.status<400)throw fail('QR_PROVIDER_REJECTED','TikTokがQRログインの要求を受け付けませんでした。公式ログインを利用してください。',response.status===429?429:502);
+ if(!response.ok||response.status>=300&&response.status<400){
+  // Only log the upstream HTTP code. Never log the QR token, cookies or body.
+  console.warn(JSON.stringify({event:'tiktok_qr_provider_failure',status:response.status,route}));
+  if(response.status===403)return Promise.reject(fail('QR_UPSTREAM_FORBIDDEN','TikTokが非公式QRログインAPIへの接続を拒否しています（HTTP 403）。この方式ではログインできません。TikTok公式Login Kitの設定が必要です。',502));
+  if(response.status===429)throw fail('QR_UPSTREAM_RATE_LIMIT','TikTok側でQRログイン要求が制限されています（HTTP 429）。時間をおいて公式の認証方法を利用してください。',429);
+  throw fail('QR_PROVIDER_REJECTED','TikTokのQRログインAPIからエラーが返りました（HTTP '+response.status+'）。',502);
+ }
  if(Number(response.headers.get('content-length')||0)>100000)throw fail('QR_RESPONSE','QR情報が大きすぎます。',502);
  let payload;try{payload=await response.json();}catch{throw fail('QR_RESPONSE','QRログインの応答形式が無効です。',502);}
  if(payload.status_code!==undefined&&Number(payload.status_code)!==0)throw fail('QR_PROVIDER_REJECTED','TikTokがQRログインを許可しませんでした。',403);
