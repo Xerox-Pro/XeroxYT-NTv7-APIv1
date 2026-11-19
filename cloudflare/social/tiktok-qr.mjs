@@ -3,6 +3,7 @@
 // No CAPTCHA or security check bypass; this integration may be rejected upstream.
 import {randomBytes} from 'node:crypto';
 import {probeSession,sessionCookies,fail} from './unofficial.mjs';
+import {registerTikTokAccount} from './account-vault.mjs';
 
 const TTL=180000;
 const origin='https://www.tiktok.com';
@@ -37,9 +38,10 @@ export async function tiktokQrFlow({route,request,identity,db,fetcher}){
   if(typeof token!=='string'||!token||token.length>512)throw fail('QR_UNAVAILABLE','QR認証トークンを取得できませんでした。',502);
   let safe;try{const url=new URL(qr);if(url.protocol!=='https:'||!['www.tiktok.com','tiktok.com','m.tiktok.com'].includes(url.hostname))throw Error('host');safe=url.href;}catch{throw fail('QR_UNAVAILABLE','TikTokのQRログインURLを確認できませんでした。',502);}
   const flowId=randomBytes(16).toString('hex'),expiresAt=Date.now()+TTL;
+  const deviceId=String(BigInt('0x'+randomBytes(8).toString('hex'))%9000000000000000000n+1000000000000000000n);
   const img=typeof data.qrcode==='string'&&data.qrcode.length<150000?data.qrcode:'';
   const qrImage=/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(img)?img:/^[A-Za-z0-9+/=]+$/.test(img)?'data:image/png;base64,'+img:'';
-  await db.write(key(identity.id),{flowId,expiresAt,token,cookies:result.cookies},expiresAt);
+  await db.write(key(identity.id),{flowId,expiresAt,token,cookies:result.cookies,deviceId},expiresAt);
   return {flowId,expiresAt,qrCodeUrl:safe,qrImage,status:'waiting'};
  }
  if(route==='qr/check'){
@@ -55,9 +57,9 @@ export async function tiktokQrFlow({route,request,identity,db,fetcher}){
   const jar={...result.cookies};
   if(data.session_key||data.sessionid){jar.sessionid=String(data.session_key||data.sessionid);jar.sessionid_ss=jar.sessionid;}
   // Never mark the QR as completed without validating the resulting session.
-  const candidate={cookies:sessionCookies(jar,'tiktok'),deviceId:'',region:'JP',uuid:crypto.randomUUID(),userAgent:headers({})['User-Agent']};
+  const candidate={cookies:sessionCookies(jar,'tiktok'),deviceId:flow.deviceId||'',region:'JP',uuid:crypto.randomUUID(),userAgent:headers({})['User-Agent']};
   const verified=await probeSession('tiktok',candidate,fetcher);
-  await db.write('social-private:tiktok:'+identity.id,{...candidate,...verified,connectedAt:Date.now()},Date.now()+30*86400000);
+  await registerTikTokAccount(db,identity.id,{...candidate,...verified,connectedAt:Date.now()});
   await db.remove(key(identity.id));
   return {status:'confirmed',connected:true,user:verified.user,capabilities:verified.capabilities};
  }
