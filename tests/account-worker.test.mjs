@@ -8,7 +8,7 @@ import {TERMS_VERSION} from '../cloudflare/auth/terms.mjs';
 function createTestDb(){
  const sqlite=new DatabaseSync(':memory:');
  sqlite.exec(readFileSync(new URL('../cloudflare/auth/schema.sql',import.meta.url),'utf8'));
- for(const name of ['2026-11-17-visual-modes.sql','2026-11-19-master-grants.sql','2026-11-19-request-logs.sql']){
+ for(const name of ['2026-11-17-visual-modes.sql','2026-11-19-master-grants.sql','2026-11-19-request-logs.sql','2026-11-19-account-presence.sql']){
   sqlite.exec(readFileSync(new URL('../cloudflare/auth/migrations/'+name,import.meta.url),'utf8'));
  }
  sqlite.exec(`
@@ -115,5 +115,28 @@ test('only Xerox0521 may grant master access, even when caller is already a mast
  assert.equal((await send(path(memberId),'POST',{action:'master',enabled:false},delegate)).status,200,'existing delegated revoke permissions remain unchanged');
  assert.equal((await send(path(memberId),'POST',{action:'master',enabled:true},member)).status,404,'regular member cannot grant');
  assert.notEqual((await send(path(list.accounts.find(row=>row.username==='xerox0521').id),'POST',{action:'master',enabled:false},delegate)).status,200,'owner cannot be revoked');
+ sqlite.close();
+});
+
+test('presence tracks visible tabs separately and admins can see current viewers',async()=>{
+ const sqlite=createTestDb();
+ const db={prepare(sql){return{bind(...args){return{async first(){return sqlite.prepare(sql).get(...args)||null;},async run(){const r=sqlite.prepare(sql).run(...args);return{meta:{changes:Number(r.changes)}};},async all(){return{results:sqlite.prepare(sql).all(...args)};}};}};}};
+ const env={DB:db,ALLOWED_ORIGINS:'https://example.test',MASTER_USERNAME:'xerox0521'};
+ const send=(path,method='GET',data,session)=>worker.fetch(new Request('https://worker.test/api/account'+path,{method,headers:{Origin:'https://example.test','Content-Type':'application/json',...(session?{Cookie:session}:{})},...(data?{body:JSON.stringify(data)}:{})}),env);
+ const register=async(username)=>{const response=await send('/register','POST',{username,password:'secure test password 123',termsAccepted:true,termsVersion:TERMS_VERSION});assert.equal(response.status,200);return response.headers.get('set-cookie').split(';')[0];};
+ const owner=await register('Xerox0521'),member=await register('viewer_member');
+ const tabA='a'.repeat(32),tabB='b'.repeat(32);
+ const viewing=async()=>{const response=await send('/admin/accounts','GET',undefined,owner);assert.equal(response.status,200);return (await response.json()).accounts.find(row=>row.username==='viewer_member').viewing;};
+ assert.equal(await viewing(),false);
+ assert.equal((await send('/presence','POST',{tabId:tabA,visible:true},member)).status,200);
+ assert.equal(await viewing(),true);
+ assert.equal((await send('/presence','POST',{tabId:tabB,visible:true},member)).status,200);
+ assert.equal((await send('/presence','POST',{tabId:tabA,visible:false},member)).status,200);
+ assert.equal(await viewing(),true,'closing one tab must not hide another visible tab');
+ assert.equal((await send('/presence','POST',{tabId:tabB,visible:false},member)).status,200);
+ assert.equal(await viewing(),false);
+ assert.equal((await send('/session?presence='+tabA,'GET',undefined,member)).status,200);
+ assert.equal(await viewing(),true,'session verification refreshes presence');
+ assert.equal((await send('/presence','POST',{tabId:'invalid',visible:true},member)).status,400);
  sqlite.close();
 });

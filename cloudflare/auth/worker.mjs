@@ -64,6 +64,9 @@ export default {
         if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
         if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
         await recordUsage(env.DB,user,request);
+        // Existing session checks refresh the current visible tab without a separate heartbeat.
+        const tabId=url.searchParams.get('presence');
+        if(tabId&&/^[a-f0-9]{32}$/.test(tabId))await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen) VALUES(?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen').bind(user.id,tabId,Date.now()).run();
         return json({ user:{...publicUser(user,env),termsAccepted:await hasTerms(env.DB,user.id)} });
       }
       if (request.method === 'POST' && (path === '/register' || path === '/login')) {
@@ -97,6 +100,15 @@ export default {
       if(path==='/dm'||path.startsWith('/dm/'))return handleDm(request,env,user,isMaster(user,env));
       if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
       if(user.traffic_stopped&&!isMaster(user,env))return json({error:'このアカウントの通信は停止されています。'},423);
+      if(path==='/presence'&&request.method==='POST'){
+        const body=await requestJson(request);
+        if(typeof body.tabId!=='string'||!/^[a-f0-9]{32}$/.test(body.tabId)||typeof body.visible!=='boolean')return json({error:'閲覧状態の形式が不正です。'},400);
+        if(body.visible){
+          await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen) VALUES(?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen').bind(user.id,body.tabId,Date.now()).run();
+          if(Math.random()<0.01)await env.DB.prepare('DELETE FROM account_presence WHERE last_seen<?').bind(Date.now()-86400000).run();
+        }else await env.DB.prepare('DELETE FROM account_presence WHERE user_id=? AND tab_id=?').bind(user.id,body.tabId).run();
+        return json({ok:true});
+      }
       if(path==='/admin/releases'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         const latest=await env.DB.prepare("SELECT version,published_at,checked_at FROM client_releases WHERE channel='gas'").bind().first();
@@ -131,7 +143,10 @@ export default {
         const result=await env.DB.prepare("SELECT users.id,users.username,users.created_at,CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped,COALESCE(SUM(account_usage.requests),0) AS requests,COALESCE(SUM(account_usage.videos),0) AS videos,COALESCE(SUM(account_usage.searches),0) AS searches,MAX(account_usage.last_seen) AS last_seen FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id LEFT JOIN account_usage ON account_usage.user_id=users.id GROUP BY users.id ORDER BY users.created_at DESC").bind().all();
         const modes=await env.DB.prepare('SELECT user_id,mode FROM account_visual_modes').bind().all();
         const byId=new Map((modes.results||[]).map(row=>[row.user_id,row.mode]));
-        return json({accounts:(result.results||[]).map(row=>({...row,is_master:isMaster(row,env),visual_mode:byId.get(row.id)||'off'}))});
+        // Only foreground tabs checked in within 90 seconds count as viewing.
+        const active=await env.DB.prepare('SELECT DISTINCT user_id FROM account_presence WHERE last_seen>=?').bind(Date.now()-90000).all();
+        const viewingIds=new Set((active.results||[]).map(row=>row.user_id));
+        return json({accounts:(result.results||[]).map(row=>({...row,is_master:isMaster(row,env),visual_mode:byId.get(row.id)||'off',viewing:viewingIds.has(row.id)}))});
       }
       const adminMatch=/^\/admin\/accounts\/([0-9a-f-]{36})$/.exec(path);
       if(adminMatch&&request.method==='POST'){
@@ -162,7 +177,7 @@ export default {
         if(action==='delete'){
           await env.DB.prepare('DELETE FROM account_visual_modes WHERE user_id=?').bind(targetId).run();
           await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=? OR granted_by=?').bind(targetId,targetId).run();
-          for(const [sql,args] of [['DELETE FROM api_oauth_flows WHERE user_id LIKE ?',[`%:${targetId}%`]],['DELETE FROM account_usage WHERE user_id=?',[targetId]],['DELETE FROM account_controls WHERE user_id=?',[targetId]],['DELETE FROM history WHERE user_id=?',[targetId]],['DELETE FROM sessions WHERE user_id=?',[targetId]],['DELETE FROM users WHERE id=?',[targetId]]])await env.DB.prepare(sql).bind(...args).run();
+          for(const [sql,args] of [['DELETE FROM api_oauth_flows WHERE user_id LIKE ?',[`%:${targetId}%`]],['DELETE FROM account_usage WHERE user_id=?',[targetId]],['DELETE FROM account_presence WHERE user_id=?',[targetId]],['DELETE FROM account_controls WHERE user_id=?',[targetId]],['DELETE FROM history WHERE user_id=?',[targetId]],['DELETE FROM sessions WHERE user_id=?',[targetId]],['DELETE FROM users WHERE id=?',[targetId]]])await env.DB.prepare(sql).bind(...args).run();
           return json({ok:true});
         }
         if(action==='resetPassword'){
