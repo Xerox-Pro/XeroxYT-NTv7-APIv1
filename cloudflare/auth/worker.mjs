@@ -130,6 +130,25 @@ export default {
         if(Math.random()<0.02)await env.DB.prepare('DELETE FROM account_request_logs WHERE at<?').bind(now-7*86400000).run();
         return json({ok:true});
       }
+      if(path==='/admin/system-logs'&&request.method==='GET'){
+        if(!isMaster(user,env))return json({error:'見つかりません。'},404);
+        const userId=url.searchParams.get('userId')||'';
+        if(userId&&!/^[0-9a-f-]{36}$/.test(userId))return json({error:'ユーザー指定が不正です。'},400);
+        const rawAfter=url.searchParams.get('after')||'0';
+        if(!/^\d{1,15}$/.test(rawAfter))return json({error:'ログ位置が不正です。'},400);
+        const after=Math.max(0,Math.floor(Number(rawAfter)));
+        const errorsOnly=url.searchParams.get('errors')==='1';
+        const conditions=['logs.at>=?'],values=[Date.now()-7*86400000];
+        if(after){conditions.push('logs.id>?');values.push(after);}
+        if(userId){conditions.push('logs.user_id=?');values.push(userId);}
+        if(errorsOnly)conditions.push('logs.status>=400');
+        const direction=after?'ASC':'DESC';
+        const sql='SELECT logs.id,logs.at,logs.route,logs.method,logs.status,logs.duration_ms,logs.user_id,users.username FROM system_request_logs logs LEFT JOIN users ON users.id=logs.user_id WHERE '+conditions.join(' AND ')+' ORDER BY logs.id '+direction+' LIMIT 150';
+        const result=await env.DB.prepare(sql).bind(...values).all();
+        const logs=result.results||[];
+        if(!after)logs.reverse();
+        return json({logs,nextAfter:logs.at(-1)?.id||after});
+      }
       if(path==='/admin/logs'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         const targetId=url.searchParams.get('userId')||'';
