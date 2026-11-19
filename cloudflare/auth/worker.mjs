@@ -128,7 +128,7 @@ export default {
         const auth=request.headers.get('authorization')||'';
         if(!env.API_SHARED_SECRET||auth!=='Bearer '+env.API_SHARED_SECRET)return json({error:'許可されていません。'},403);
         const body=await requestJson(request);
-        const route=typeof body.route==='string'&&/^\\/api\\/[a-z0-9/:_-]{1,90}$/.test(body.route)?body.route:null;
+        const route=typeof body.route==='string'&&/^\/api\/[a-z0-9/:_-]{1,90}$/.test(body.route)?body.route:null;
         const method=typeof body.method==='string'&&['GET','POST','PUT','PATCH','DELETE','HEAD'].includes(body.method)?body.method:null;
         if(!route||!method||!Number.isInteger(body.status)||body.status<100||body.status>599||!Number.isFinite(body.durationMs))return json({error:'ログ形式が不正です。'},400);
         const now=Date.now();
