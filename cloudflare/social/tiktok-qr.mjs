@@ -10,7 +10,7 @@ const headers=cookies=>({'Accept':'application/json','Accept-Language':'ja-JP,ja
 const cookieNames=new Set(['sessionid','sessionid_ss','sid_tt','sid_guard','uid_tt','uid_tt_ss','ttwid','msToken','tt_webid','tt_webid_v2','passport_csrf_token','tt_csrf_token','store-idc','store-country-code']);
 function cookieUpdates(response,old){
  const jar={...old};
- for(const line of response.headers.getSetCookie?.()||[]){
+ for(const line of response.headers.getSetCookie?.()||[response.headers.get('set-cookie')].filter(Boolean)){
   const found=/^([^=;\s]+)=([^;\s]*)/.exec(line);
   if(found&&cookieNames.has(found[1])&&found[2].length<4096)jar[found[1]]=found[2];
  }
@@ -30,6 +30,8 @@ const key=id=>'social-qr:tiktok:'+id;
 export async function tiktokQrFlow({route,request,identity,db,fetcher}){
  if(request.method!=='POST'||!request.headers.get('content-type')?.startsWith('application/json'))throw fail('QR_FORMAT','QRログインの送信形式が無効です。',415);
  if(route==='qr/start'){
+  const body=await request.json().catch(()=>({}));
+  if(body.consent!==true)throw fail('QR_CONSENT','非公式連携の注意事項への同意が必要です。',400);
   const result=await getJson(fetcher,'/passport/web/qr/get_code/',{aid:1988,service:origin},{}),data=result.data;
   const token=data.token,qr=data.qrcode_index_url||data.scan_url;
   if(typeof token!=='string'||!token||token.length>512)throw fail('QR_UNAVAILABLE','QR認証トークンを取得できませんでした。',502);
