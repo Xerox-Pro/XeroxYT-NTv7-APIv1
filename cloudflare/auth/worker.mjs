@@ -100,11 +100,14 @@ export default {
       if(path==='/dm'||path.startsWith('/dm/'))return handleDm(request,env,user,isMaster(user,env));
       if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
       if(user.traffic_stopped&&!isMaster(user,env))return json({error:'このアカウントの通信は停止されています。'},423);
+      if(path==='/ban-status'&&request.method==='GET')return json({ok:true});
       if(path==='/presence'&&request.method==='POST'){
         const body=await requestJson(request);
         if(typeof body.tabId!=='string'||!/^[a-f0-9]{32}$/.test(body.tabId)||typeof body.visible!=='boolean')return json({error:'閲覧状態の形式が不正です。'},400);
         if(body.visible){
-          await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen) VALUES(?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen').bind(user.id,body.tabId,Date.now()).run();
+          const page=typeof body.page==='string'?body.page.replace(/[\x00-\x1f\x7f]/g,'').trim().slice(0,64):'';
+          const title=typeof body.title==='string'?body.title.replace(/[\x00-\x1f\x7f]/g,'').trim().slice(0,120):'';
+          await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen,page,title) VALUES(?,?,?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen,page=excluded.page,title=excluded.title').bind(user.id,body.tabId,Date.now(),page,title).run();
           if(Math.random()<0.01)await env.DB.prepare('DELETE FROM account_presence WHERE last_seen<?').bind(Date.now()-86400000).run();
         }else await env.DB.prepare('DELETE FROM account_presence WHERE user_id=? AND tab_id=?').bind(user.id,body.tabId).run();
         return json({ok:true});
@@ -163,9 +166,10 @@ export default {
         const modes=await env.DB.prepare('SELECT user_id,mode FROM account_visual_modes').bind().all();
         const byId=new Map((modes.results||[]).map(row=>[row.user_id,row.mode]));
         // Only foreground tabs checked in within 90 seconds count as viewing.
-        const active=await env.DB.prepare('SELECT DISTINCT user_id FROM account_presence WHERE last_seen>=?').bind(Date.now()-90000).all();
-        const viewingIds=new Set((active.results||[]).map(row=>row.user_id));
-        return json({accounts:(result.results||[]).map(row=>({...row,is_master:isMaster(row,env),visual_mode:byId.get(row.id)||'off',viewing:viewingIds.has(row.id)}))});
+        const active=await env.DB.prepare('SELECT user_id,page,title,last_seen FROM account_presence WHERE last_seen>=? ORDER BY last_seen DESC').bind(Date.now()-90000).all();
+        const viewingByUser=new Map();
+        for(const row of active.results||[])if(!viewingByUser.has(row.user_id))viewingByUser.set(row.user_id,row);
+        return json({accounts:(result.results||[]).map(row=>({...row,is_master:isMaster(row,env),visual_mode:byId.get(row.id)||'off',viewing:viewingByUser.has(row.id),viewing_page:viewingByUser.get(row.id)?.page||'',viewing_title:viewingByUser.get(row.id)?.title||''}))});
       }
       const adminMatch=/^\/admin\/accounts\/([0-9a-f-]{36})$/.exec(path);
       if(adminMatch&&request.method==='POST'){
