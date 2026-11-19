@@ -5,6 +5,7 @@ import {authorizeSource} from '../../access-policy.mjs';
 import accountWorker from '../auth/worker.mjs';
 import {handleYouTubeStore} from '../../youtube-store-bridge.mjs';
 import {withGasAccess} from './gas-access.mjs';
+import {createD1Database} from '../../d1-rest.mjs';
 async function handleRequest(request,env,ctx){
  const pathName=new URL(request.url).pathname;
  if(socialCallback(pathName))return handleSocialApi(request,env);
@@ -99,4 +100,11 @@ const worker={async fetch(request,env,ctx){
   }
  }
 }};
-export default withGasAccess(worker);
+const gateway = withGasAccess(worker);
+export default {
+ fetch(request, env, ctx) {
+  if (env.DB) return gateway.fetch(request, env, ctx);
+  const database = createD1Database(env);
+  return gateway.fetch(request, database ? {...env, DB: database} : env, ctx);
+ },
+};
