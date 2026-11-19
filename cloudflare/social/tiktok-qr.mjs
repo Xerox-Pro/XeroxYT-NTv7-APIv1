@@ -24,7 +24,7 @@ async function getJson(fetcher,route,params,cookies){
  if(!response.ok||response.status>=300&&response.status<400){
   // Only log the upstream HTTP code. Never log the QR token, cookies or body.
   console.warn(JSON.stringify({event:'tiktok_qr_provider_failure',status:response.status,route}));
-  if(response.status===403)return Promise.reject(fail('QR_UPSTREAM_FORBIDDEN','TikTokが非公式QRログインAPIへの接続を拒否しています（HTTP 403）。この方式ではログインできません。TikTok公式Login Kitの設定が必要です。',502));
+  if(response.status===403)throw fail('QR_UPSTREAM_FORBIDDEN','TikTokが非公式QRログインAPIへの接続を拒否しています（HTTP 403）。この方式ではログインできません。TikTok公式Login Kitの設定が必要です。',502);
   if(response.status===429)throw fail('QR_UPSTREAM_RATE_LIMIT','TikTok側でQRログイン要求が制限されています（HTTP 429）。時間をおいて公式の認証方法を利用してください。',429);
   throw fail('QR_PROVIDER_REJECTED','TikTokのQRログインAPIからエラーが返りました（HTTP '+response.status+'）。',502);
  }
