@@ -155,7 +155,10 @@ export default {
           else return json({error:'権限設定が無効です。'},400);
           return json({ok:true,isMaster:body.enabled});
         }
-        if(isMaster(target,env)||isOwner(target))return json({error:'保護対象のアカウントは変更できません。'},403);
+        // Every master may lift an existing BAN/traffic stop regardless of who applied it.
+        // Owner protection is absolute; other master accounts remain protected from new restrictions.
+        const restoreOnly=(action==='ban'||action==='traffic')&&body.enabled===false;
+        if(isOwner(target)||(isMaster(target,env)&&!restoreOnly))return json({error:'保護対象のアカウントは変更できません。'},403);
         if(action==='delete'){
           await env.DB.prepare('DELETE FROM account_visual_modes WHERE user_id=?').bind(targetId).run();
           await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=? OR granted_by=?').bind(targetId,targetId).run();
