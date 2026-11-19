@@ -1,5 +1,6 @@
 import {handlePublicSocial} from './public.mjs';
 import {browserLogin} from './browser-login.mjs';
+import {tiktokQrFlow} from './tiktok-qr.mjs';
 import {privateFollowing,privateSearch,privateComments,privateAction,sessionCookies,probeSession,privateFeed,privateThreads,privateMessages,privateSend,privateStories,boundedBytes,fail} from './unofficial.mjs';
 import {randomBytes,createHash} from 'node:crypto';
 import {credentialVault} from '../../youtube-account.mjs';
@@ -48,6 +49,10 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
   return json({title:typeof result.title==='string'?result.title.slice(0,1000):'',author:match[1],thumbnail:typeof result.thumbnail_url==='string'&&result.thumbnail_url.startsWith('https://')?result.thumbnail_url:''});
  }
  const unofficialEnabled=env.SOCIAL_UNOFFICIAL_ENABLED==='true';
+ if(service==='tiktok'&&route.startsWith('qr/')){
+  if(!unofficialEnabled)throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式ログインを利用できません。');
+  return json(await tiktokQrFlow({route,request,identity,db,fetcher}));
+ }
  if(route.startsWith('login/')){if(!unofficialEnabled)throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式接続は無効です。');if(request.method!=='POST')return json({error:'Method not allowed'},405);if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const bytes=await boundedBytes(request,4096);const safeRequest=new Request(request.url,{method:'POST',headers:request.headers,body:bytes});return json(await browserLogin({route,service,request:safeRequest,env,db,identity,fetcher}));}
  if(!unofficialEnabled&&(route.startsWith('unofficial/')||['feed','stories','threads','messages','messages/send','following','search','comments','likes','notes'].includes(route)))throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式接続は安全性と動作の検証が完了するまで利用できません。');
  if(route==='unofficial/connect'&&request.method==='POST'){
