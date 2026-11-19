@@ -187,7 +187,7 @@ export default {
         if(action==='ban'||action==='traffic'){
           const column=action==='ban'?'banned':'traffic_stopped',enabled=body.enabled?1:0;
           await env.DB.prepare(`INSERT INTO account_controls(user_id,${column},updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`).bind(targetId,enabled,Date.now()).run();
-          if(action==='ban'&&!enabled)await env.DB.prepare('DELETE FROM login_attempts WHERE key=? OR key LIKE ?').bind('abuse-penalty:'+targetId,'youtube-rate:%:'+targetId).run();
+          if(action==='ban'&&!enabled){try{await env.DB.prepare('DELETE FROM login_attempts WHERE key=? OR key LIKE ?').bind('abuse-penalty:'+targetId,'youtube-rate:%:'+targetId).run();}catch(error){console.warn('Post-unban rate-limit cleanup failed:',error instanceof Error?error.message:'unknown');}}
           // Keep a banned account's session only so every device can receive the
           // explicit BAN response and persist its lock screen. All account data
           // routes remain blocked above. Traffic stops still revoke sessions.
