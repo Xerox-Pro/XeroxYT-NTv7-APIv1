@@ -63,7 +63,9 @@ export default {
         if(!user)return json({ error: 'ログインが必要です。' }, 401);
         if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
         if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
-        await recordUsage(env.DB,user,request);
+        // A session check is a read-only authentication decision. Do not write
+        // usage statistics on every check: exhausted D1 write quota must never
+        // prevent valid users from verifying their existing sessions.
         // Existing session checks refresh the current visible tab without a separate heartbeat.
         const tabId=url.searchParams.get('presence');
         if(tabId&&/^[a-f0-9]{32}$/.test(tabId))await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen) VALUES(?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen').bind(user.id,tabId,Date.now()).run();
