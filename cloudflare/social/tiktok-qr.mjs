@@ -33,12 +33,12 @@ export async function tiktokQrFlow({route,request,identity,db,fetcher}){
  if(route==='qr/start'){
   const body=await request.json().catch(()=>({}));
   if(body.consent!==true)throw fail('QR_CONSENT','非公式連携の注意事項への同意が必要です。',400);
-  const result=await getJson(fetcher,'/passport/web/qr/get_code/',{aid:1988,service:origin},{}),data=result.data;
+  const deviceId=String(BigInt('0x'+randomBytes(8).toString('hex'))%9000000000000000000n+1000000000000000000n);
+  const result=await getJson(fetcher,'/passport/web/qr/get_code/',{aid:1988,service:origin,device_id:deviceId,app_name:'tiktok_web',device_platform:'web_pc'},{}),data=result.data;
   const token=data.token,qr=data.qrcode_index_url||data.scan_url;
   if(typeof token!=='string'||!token||token.length>512)throw fail('QR_UNAVAILABLE','QR認証トークンを取得できませんでした。',502);
   let safe;try{const url=new URL(qr);if(url.protocol!=='https:'||!['www.tiktok.com','tiktok.com','m.tiktok.com'].includes(url.hostname))throw Error('host');safe=url.href;}catch{throw fail('QR_UNAVAILABLE','TikTokのQRログインURLを確認できませんでした。',502);}
   const flowId=randomBytes(16).toString('hex'),expiresAt=Date.now()+TTL;
-  const deviceId=String(BigInt('0x'+randomBytes(8).toString('hex'))%9000000000000000000n+1000000000000000000n);
   const img=typeof data.qrcode==='string'&&data.qrcode.length<150000?data.qrcode:'';
   const qrImage=/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(img)?img:/^[A-Za-z0-9+/=]+$/.test(img)?'data:image/png;base64,'+img:'';
   await db.write(key(identity.id),{flowId,expiresAt,token,cookies:result.cookies,deviceId},expiresAt);
@@ -49,7 +49,7 @@ export async function tiktokQrFlow({route,request,identity,db,fetcher}){
   const body=await request.json().catch(()=>({}));
   const flow=await db.read(key(identity.id));
   if(!flow||flow.expiresAt<Date.now()||typeof body.flowId!=='string'||body.flowId!==flow.flowId)return {status:'expired'};
-  const result=await getJson(fetcher,'/passport/web/qr/check_status/',{aid:1988,service:origin,token:flow.token},flow.cookies);
+  const result=await getJson(fetcher,'/passport/web/qr/check_status/',{aid:1988,service:origin,token:flow.token,device_id:flow.deviceId,app_name:'tiktok_web',device_platform:'web_pc'},flow.cookies);
   const data=result.data,answer=String(data.status||'').toLowerCase();
   if(answer==='expired'||answer==='timeout'){await db.remove(key(identity.id));return {status:'expired'};}
   if(answer==='scanned')return {status:'scanned'};
