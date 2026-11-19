@@ -1,6 +1,7 @@
 import {handlePublicSocial} from './public.mjs';
 import {browserLogin} from './browser-login.mjs';
 import {tiktokQrFlow} from './tiktok-qr.mjs';
+import {registerTikTokAccount,listTikTokAccounts,activateTikTokAccount,removeTikTokAccount} from './account-vault.mjs';
 import {privateFollowing,privateSearch,privateComments,privateAction,sessionCookies,probeSession,privateFeed,privateThreads,privateMessages,privateSend,privateStories,boundedBytes,fail} from './unofficial.mjs';
 import {randomBytes,createHash} from 'node:crypto';
 import {credentialVault} from '../../youtube-account.mjs';
@@ -42,6 +43,14 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
  const limited=await privateRateLimit(env.DB,identity.id,url.pathname,request.method);if(limited)return limited;
  if(Number(request.headers.get('content-length')||0)>32768)throw error(413,'PAYLOAD_TOO_LARGE','送信データが大きすぎます。');
  const key=`social-link:${service}:${identity.id}`,link=await db.read(key),privateKey=`social-private:${service}:${identity.id}`,privateLink=await db.read(privateKey);
+ if(service==='tiktok'&&route==='accounts'&&request.method==='GET')return json(await listTikTokAccounts(db,identity.id));
+ if(service==='tiktok'&&(route==='accounts/activate'||route==='accounts/remove')&&request.method==='POST'){
+  if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式が必要です。');
+  let body;try{body=JSON.parse(new TextDecoder().decode(await boundedBytes(request,1024)));}catch{throw error(400,'FORMAT','JSON形式が無効です。');}
+  if(typeof body.accountId!=='string'||!/^[0-9]{1,35}$/.test(body.accountId))throw error(400,'ACCOUNT_ID','アカウントの指定が無効です。');
+  const result=route==='accounts/activate'?await activateTikTokAccount(db,identity.id,body.accountId):await removeTikTokAccount(db,identity.id,body.accountId);
+  if(!result)throw error(404,'ACCOUNT_NOT_FOUND','保存されたTikTokアカウントが見つかりません。');return json(result);
+ }
  if(route==='embed-info'&&request.method==='GET'&&service==='tiktok'){
   let target;try{target=new URL(url.searchParams.get('url'));}catch{throw error(400,'PUBLIC_LINK','公開投稿のURLが無効です。');}
   const match=target.pathname.match(/^\/@([A-Za-z0-9._]{1,40})\/(?:video|photo)\/(\d{10,25})\/?$/);if(target.protocol!=='https:'||target.username||target.password||target.port||!['www.tiktok.com','tiktok.com'].includes(target.hostname)||!match)throw error(400,'PUBLIC_LINK','公開投稿のURLが無効です。');
@@ -56,7 +65,7 @@ export function createSocialApi(fetcher=fetch){return async(request,env)=>{
  if(route.startsWith('login/')){if(!unofficialEnabled)throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式接続は無効です。');if(request.method!=='POST')return json({error:'Method not allowed'},405);if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const bytes=await boundedBytes(request,4096);const safeRequest=new Request(request.url,{method:'POST',headers:request.headers,body:bytes});return json(await browserLogin({route,service,request:safeRequest,env,db,identity,fetcher}));}
  if(!unofficialEnabled&&(route.startsWith('unofficial/')||['feed','stories','threads','messages','messages/send','following','search','comments','likes','notes'].includes(route)))throw error(503,'PRIVATE_CONNECTION_DISABLED','非公式接続は安全性と動作の検証が完了するまで利用できません。');
  if(route==='unofficial/connect'&&request.method==='POST'){
-  if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const raw=new TextDecoder().decode(await boundedBytes(request,32768));if(raw.length>20000)throw error(413,'PAYLOAD_TOO_LARGE','接続情報が大きすぎます。');let body;try{body=JSON.parse(raw);}catch{throw error(400,'FORMAT','接続情報の形式が無効です。');}if(body.consent!==true)throw error(400,'CONSENT','非公式接続の注意事項を確認してください。');const candidate={cookies:sessionCookies(body.cookies,service),deviceId:/^\d{10,25}$/.test(body.deviceId||'')?body.deviceId:'',region:'JP',uuid:crypto.randomUUID(),userAgent:(request.headers.get('user-agent')||'XeroxYT social client').slice(0,300)};const verified=await probeSession(service,candidate,fetcher);await db.write(privateKey,{...candidate,...verified,connectedAt:Date.now()},Date.now()+30*86400000);return json({connected:true,user:verified.user,capabilities:verified.capabilities});
+  if(!request.headers.get('content-type')?.startsWith('application/json'))throw error(415,'FORMAT','JSON形式で送信してください。');const raw=new TextDecoder().decode(await boundedBytes(request,32768));if(raw.length>20000)throw error(413,'PAYLOAD_TOO_LARGE','接続情報が大きすぎます。');let body;try{body=JSON.parse(raw);}catch{throw error(400,'FORMAT','接続情報の形式が無効です。');}if(body.consent!==true)throw error(400,'CONSENT','非公式接続の注意事項を確認してください。');const candidate={cookies:sessionCookies(body.cookies,service),deviceId:/^\d{10,25}$/.test(body.deviceId||'')?body.deviceId:'',region:'JP',uuid:crypto.randomUUID(),userAgent:(request.headers.get('user-agent')||'XeroxYT social client').slice(0,300)};const verified=await probeSession(service,candidate,fetcher);if(service==='tiktok')await registerTikTokAccount(db,identity.id,{...candidate,...verified,connectedAt:Date.now()});else await db.write(privateKey,{...candidate,...verified,connectedAt:Date.now()},Date.now()+30*86400000);return json({connected:true,user:verified.user,capabilities:verified.capabilities});
  }
  if(route==='unofficial/disconnect'&&request.method==='POST'){await db.remove(privateKey);return json({success:true});}
  if(['feed','stories','threads','messages','messages/send','following','search','comments','likes','notes'].includes(route)){
