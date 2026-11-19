@@ -66,7 +66,7 @@ async function getYt() {
         
         yt = optimizePublicVideoReads(instance);
         console.log("[YT] Innertube initialized successfully");
-        return instance;
+        return yt;
       } catch (err) {
         console.error(`[YT] Initialization error (Attempt ${attempts}):`, err);
         if (attempts >= maxAttempts) {
@@ -1615,7 +1615,7 @@ async function startServer() {
       // 視聴履歴の動画情報を取得 (最大12件に拡張)
       if (historyIds.length > 0) {
         try {
-          const sampleHistory = historyIds.slice(0, 12);
+          const sampleHistory = historyIds.slice(0, 4);
           const historyDetails = await Promise.all(
             sampleHistory.map(async (id) => {
               try {
@@ -1691,7 +1691,7 @@ async function startServer() {
           const j = Math.floor(getSeedRandom(page * 7 + i) * (i + 1));
           [hCopy[i], hCopy[j]] = [hCopy[j], hCopy[i]];
         }
-        sampledHistoryIds = hCopy.slice(0, 10);
+        sampledHistoryIds = hCopy.slice(0, 3);
       }
 
       let personalizedVideos = [];
@@ -1719,7 +1719,7 @@ async function startServer() {
         });
 
         // データが足りない場合（例：40件未満）、関連動画のさらに関連動画を取得（ディープフェッチ）
-        if (personalizedVideos.length < 40) {
+        if (personalizedVideos.length < 8) {
           const fetchedIds = new Set(sampledHistoryIds);
           const candidateDeepIds = personalizedVideos
             .map((v) => v.id || v.videoId || v.content_id)
@@ -1734,7 +1734,7 @@ async function startServer() {
                 candidateDeepIds[i],
               ];
             }
-            const deepSample = candidateDeepIds.slice(0, 5);
+            const deepSample = candidateDeepIds.slice(0, 1);
             const deepRelatedTasks = deepSample.map(async (id) => {
               try {
                 let info;
@@ -1816,7 +1816,7 @@ async function startServer() {
       generalQueries.push(...shuffledCategories.slice(0, 3));
 
       const searchTasks = generalQueries
-        .slice(0, 4)
+        .slice(0, 2)
         .map((q) =>
           youtube
             .search(q, { type: "video", prioritize: "popularity" })
