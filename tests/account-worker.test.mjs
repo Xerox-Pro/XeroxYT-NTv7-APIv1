@@ -5,9 +5,21 @@ import { readFileSync } from 'node:fs';
 import worker from '../cloudflare/auth/worker.mjs';
 import {TERMS_VERSION} from '../cloudflare/auth/terms.mjs';
 
+function createTestDb(){
+ const sqlite=new DatabaseSync(':memory:');
+ sqlite.exec(readFileSync(new URL('../cloudflare/auth/schema.sql',import.meta.url),'utf8'));
+ for(const name of ['2026-11-17-visual-modes.sql','2026-11-19-master-grants.sql','2026-11-19-request-logs.sql']){
+  sqlite.exec(readFileSync(new URL('../cloudflare/auth/migrations/'+name,import.meta.url),'utf8'));
+ }
+ sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS account_controls(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,banned INTEGER NOT NULL DEFAULT 0,traffic_stopped INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS account_usage(user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,day TEXT NOT NULL,requests INTEGER NOT NULL DEFAULT 0,videos INTEGER NOT NULL DEFAULT 0,searches INTEGER NOT NULL DEFAULT 0,last_seen INTEGER NOT NULL,PRIMARY KEY(user_id,day));
+ `);
+ return sqlite;
+}
+
 test('registration, login, isolation, history and logout', async () => {
-  const sqlite = new DatabaseSync(':memory:');
-  sqlite.exec(readFileSync(new URL('../cloudflare/auth/schema.sql', import.meta.url), 'utf8'));
+  const sqlite = createTestDb();
   const db = { prepare(sql) { return { bind(...args) { return { async first() { return sqlite.prepare(sql).get(...args) || null; }, async run() { const r = sqlite.prepare(sql).run(...args); return { meta: { changes: Number(r.changes) } }; }, async all(){return {results:sqlite.prepare(sql).all(...args)};} }; } }; } };
   const env = { DB: db, ALLOWED_ORIGINS: 'https://example.test' };
   const send = (path, method = 'GET', data, session, origin = 'https://example.test') => worker.fetch(new Request(`https://worker.test/api/account${path}`, { method, headers: { Origin: origin, 'Content-Type': 'application/json', ...(session ? { Cookie: session } : {}) }, ...(data ? { body: JSON.stringify(data) } : {}) }), env);
@@ -33,7 +45,7 @@ test('registration, login, isolation, history and logout', async () => {
 });
 
 test('only Xerox0521 can manage unique accounts, usage, passwords, traffic and bans',async()=>{
- const sqlite=new DatabaseSync(':memory:');sqlite.exec(readFileSync(new URL('../cloudflare/auth/schema.sql',import.meta.url),'utf8'));
+ const sqlite=createTestDb();
  const db={prepare(sql){return{bind(...args){return{async first(){return sqlite.prepare(sql).get(...args)||null;},async run(){const r=sqlite.prepare(sql).run(...args);return{meta:{changes:Number(r.changes)}};},async all(){return{results:sqlite.prepare(sql).all(...args)};}};}};}};
  const env={DB:db,ALLOWED_ORIGINS:'https://example.test',MASTER_USERNAME:'xerox0521'};
  const send=(path,method='GET',data,session,usagePath)=>worker.fetch(new Request(`https://worker.test/api/account${path}`,{method,headers:{Origin:'https://example.test','Content-Type':'application/json',...(session?{Cookie:session}:{}),...(usagePath?{'X-Account-Usage-Path':usagePath}:{})},...(data?{body:JSON.stringify(data)}:{})}),env);
@@ -58,5 +70,32 @@ test('only Xerox0521 can manage unique accounts, usage, passwords, traffic and b
  await send('/admin/accounts/'+row.id,'POST',{action:'resetPassword',password:'replacement password 123'},master.session);assert.equal((await send('/login','POST',{username:'member_one',password:'member password 123'})).status,401);const activeLogin=await send('/login','POST',{username:'member_one',password:'replacement password 123'});assert.equal(activeLogin.status,200);const activeSession=activeLogin.headers.get('set-cookie').split(';')[0];
  await send('/admin/accounts/'+row.id,'POST',{action:'ban',enabled:true},master.session);const bannedLogin=await send('/login','POST',{username:'member_one',password:'replacement password 123'});assert.equal(bannedLogin.status,403);assert.equal((await bannedLogin.json()).code,'ACCOUNT_BANNED');const bannedSession=await send('/session','GET',undefined,activeSession);assert.equal(bannedSession.status,403);assert.equal((await bannedSession.json()).code,'ACCOUNT_BANNED');
  await send('/admin/accounts/'+row.id,'POST',{action:'ban',enabled:false},master.session);assert.equal((await send('/admin/accounts/'+row.id,'POST',{action:'delete'},master.session)).status,200);assert.equal((await send('/login','POST',{username:'member_one',password:'replacement password 123'})).status,401);
+ sqlite.close();
+});
+
+test('only Xerox0521 may grant master access, even when caller is already a master',async()=>{
+ const sqlite=createTestDb();
+ const db={prepare(sql){return{bind(...args){return{async first(){return sqlite.prepare(sql).get(...args)||null;},async run(){const r=sqlite.prepare(sql).run(...args);return{meta:{changes:Number(r.changes)}};},async all(){return{results:sqlite.prepare(sql).all(...args)};}};}};}};
+ const env={DB:db,ALLOWED_ORIGINS:'https://example.test',MASTER_USERNAME:'xerox0521'};
+ const send=(path,method='GET',data,session)=>worker.fetch(new Request('https://worker.test/api/account'+path,{method,headers:{Origin:'https://example.test','Content-Type':'application/json',...(session?{Cookie:session}:{})},...(data?{body:JSON.stringify(data)}:{})}),env);
+ const register=async(username)=>{const response=await send('/register','POST',{username,password:'secure test password 123',termsAccepted:true,termsVersion:TERMS_VERSION});assert.equal(response.status,200);return response.headers.get('set-cookie').split(';')[0];};
+ const owner=await register('Xerox0521'),delegate=await register('delegated_master'),member=await register('regular_member');
+ const list=await (await send('/admin/accounts','GET',undefined,owner)).json();
+ const delegateId=list.accounts.find(row=>row.username==='delegated_master').id;
+ const memberId=list.accounts.find(row=>row.username==='regular_member').id;
+ const path=id=>'/admin/accounts/'+id;
+ assert.equal((await send(path(delegateId),'POST',{action:'master',enabled:true},owner)).status,200);
+ assert.equal((await (await send('/session','GET',undefined,delegate)).json()).user.admin,true);
+ const denied=await send(path(memberId),'POST',{action:'master',enabled:true},delegate);
+ assert.equal(denied.status,403,'delegated master must not grant another master');
+ assert.match((await denied.json()).error,/Xerox0521/);
+ let accounts=await (await send('/admin/accounts','GET',undefined,owner)).json();
+ assert.equal(accounts.accounts.find(row=>row.id===memberId).is_master,false);
+ assert.equal((await send(path(memberId),'POST',{action:'master',enabled:true},owner)).status,200);
+ accounts=await (await send('/admin/accounts','GET',undefined,owner)).json();
+ assert.equal(accounts.accounts.find(row=>row.id===memberId).is_master,true);
+ assert.equal((await send(path(memberId),'POST',{action:'master',enabled:false},delegate)).status,200,'existing delegated revoke permissions remain unchanged');
+ assert.equal((await send(path(memberId),'POST',{action:'master',enabled:true},member)).status,404,'regular member cannot grant');
+ assert.notEqual((await send(path(list.accounts.find(row=>row.username==='xerox0521').id),'POST',{action:'master',enabled:false},delegate)).status,200,'owner cannot be revoked');
  sqlite.close();
 });
