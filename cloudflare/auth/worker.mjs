@@ -100,7 +100,6 @@ export default {
       if(path==='/dm'||path.startsWith('/dm/'))return handleDm(request,env,user,isMaster(user,env));
       if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
       if(user.traffic_stopped&&!isMaster(user,env))return json({error:'このアカウントの通信は停止されています。'},423);
-      if(path==='/ban-status'&&request.method==='GET')return json({ok:true});
       if(path==='/presence'&&request.method==='POST'){
         const body=await requestJson(request);
         if(typeof body.tabId!=='string'||!/^[a-f0-9]{32}$/.test(body.tabId)||typeof body.visible!=='boolean')return json({error:'閲覧状態の形式が不正です。'},400);
@@ -132,6 +131,19 @@ export default {
         await env.DB.prepare('INSERT INTO account_request_logs(user_id,at,route,method,status,duration_ms) VALUES(?,?,?,?,?,?)').bind(user.id,now,route,method,body.status,Math.max(0,Math.min(60000,Math.round(body.durationMs)))).run();
         if(Math.random()<0.02)await env.DB.prepare('DELETE FROM account_request_logs WHERE at<?').bind(now-7*86400000).run();
         return json({ok:true});
+      }
+      if(path==='/admin/system-monitor'&&(request.method==='GET'||request.method==='POST')){
+        if(!isMaster(user,env))return json({error:'見つかりません。'},404);
+        if(request.method==='GET'){
+          const state=await env.DB.prepare('SELECT enabled,updated_at FROM system_monitor_settings WHERE id=1').first();
+          return json({enabled:state?.enabled===1,updatedAt:state?.updated_at||0});
+        }
+        const body=await requestJson(request);
+        if(typeof body.enabled!=='boolean')return json({error:'有効・無効の指定が不正です。'},400);
+        const updatedAt=Date.now();
+        await env.DB.prepare('INSERT INTO system_monitor_settings(id,enabled,updated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled,updated_at=excluded.updated_at')
+          .bind(body.enabled?1:0,updatedAt).run();
+        return json({ok:true,enabled:body.enabled,updatedAt});
       }
       if(path==='/admin/system-logs'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
