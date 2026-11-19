@@ -18,7 +18,7 @@ async function currentUser(request, db) {
   return db.prepare('SELECT users.id, users.username, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(hash(token), Date.now()).first();
 }
 const isOwner = user => user?.username?.toLowerCase() === 'xerox0521';
-const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&(user.username===env.MASTER_USERNAME.trim().toLowerCase()||user.master_granted===1);
+const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&(isOwner(user)||user.username===env.MASTER_USERNAME.trim().toLowerCase()||user.master_granted===1);
 const publicUser = (user,env) => ({id:user.id,username:user.username,...(isMaster(user,env)?{admin:true}:{})});
 const usageDay = now => new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0,10);
 async function recordUsage(db,user,request){
@@ -147,7 +147,7 @@ export default {
         }
         if(action==='master'){
           if(target.id===user.id||isOwner(target))return json({error:'オーナーまたは自分自身の管理権限は変更できません。'},403);
-          if(target.username===String(env.MASTER_USERNAME||'').trim().toLowerCase())return json({error:'初期マスターの権限は変更できません。'},400);
+          if(isOwner(target)||target.username===String(env.MASTER_USERNAME||'').trim().toLowerCase())return json({error:'初期マスターの権限は変更できません。'},400);
           if(body.enabled===true)await env.DB.prepare('INSERT OR IGNORE INTO account_master_grants(user_id,granted_by,granted_at) VALUES(?,?,?)').bind(targetId,user.id,Date.now()).run();
           else if(body.enabled===false)await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=?').bind(targetId).run();
           else return json({error:'権限設定が無効です。'},400);
