@@ -30,5 +30,50 @@ async function handleRequest(request,env,ctx){
  }catch(error){console.warn(JSON.stringify({event:'api_proxy_error',name:error.name||'Error',reason:/[\w.$]+ is not a function/.exec(error.message)?.[0]||(/I\/O/.test(error.message)?'request_context':'other'),frames:String(error.stack||'').split('\n').slice(1,3)}));response=Response.json({error:'サーバーとの通信に失敗しました。再試行してください。',code:'API_UPSTREAM_FAILED'},{status:502});}
  const headers=new Headers(response.headers);for(const[k,v]of Object.entries(cors))headers.set(k,v);headers.set('X-XeroxYT-Proxy','cloudflare');return new Response(response.body,{status:response.status,headers});
 }
-const worker={async fetch(request,env,ctx){const response=await handleRequest(request,env,ctx);return /^\/(api|internal)(\/|$)|^\/health$/.test(new URL(request.url).pathname)?secureApiResponse(response):response;}};
+// Store operation-level API metadata only: never URLs, query strings, request bodies, or headers.
+function safeOperation(pathname){
+ const parts=pathname.split('/').filter(Boolean).slice(0,5);
+ return '/'+parts.map((part,index)=>{
+  if(index>=3||(index>=2&&(/^[a-zA-Z0-9_-]{11}$/.test(part)||part.length>24)))return ':id';
+  return /^[a-z][a-z0-9_-]{0,31}$/i.test(part)?part.toLowerCase():':id';
+ }).join('/');
+}
+async function recordSystemRequest(request,env,route,status,durationMs){
+ let userId=null;
+ const token=/(?:^|;\s*)__Host-xy_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get('Cookie')||'')?.[1];
+ if(token){
+  try{
+   const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));
+   const tokenHash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+   const session=await env.DB.prepare('SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?').bind(tokenHash,Date.now()).first();
+   userId=session?.user_id||null;
+  }catch(error){console.warn('system_log_session_lookup_failed',error instanceof Error?error.message:'unknown');}
+ }
+ const now=Date.now();
+ await env.DB.prepare('INSERT INTO system_request_logs(user_id,at,route,method,status,duration_ms) VALUES(?,?,?,?,?,?)')
+  .bind(userId,now,route,request.method,status,Math.max(0,Math.min(60000,durationMs))).run();
+ if(Math.random()<0.005){
+  try{await env.DB.prepare('DELETE FROM system_request_logs WHERE at<?').bind(now-7*86400000).run();}
+  catch(error){console.warn('system_log_cleanup_failed',error instanceof Error?error.message:'unknown');}
+ }
+}
+const worker={async fetch(request,env,ctx){
+ const started=Date.now(),path=new URL(request.url).pathname;
+ let response;
+ try{
+  const upstream=await handleRequest(request,env,ctx);
+  response=/^\/(api|internal)(\/|$)|^\/health$/.test(path)?secureApiResponse(upstream):upstream;
+  return response;
+ }finally{
+  // Cloudflare waitUntil writes the log without delaying API responses or video streaming.
+  if(env.DB&&ctx?.waitUntil&&request.method!=='OPTIONS'
+    &&/^\/(?:api(?:\/|$)|stream\/|360\/|edu\/|scratch-edu\/)/.test(path)
+    &&!/^\/api\/account\/(?:telemetry|admin\/(?:logs|system-logs))(?:\/|$)/.test(path)){
+   const route=safeOperation(path);
+   const task=recordSystemRequest(request,env,route,response?.status||500,Date.now()-started)
+     .catch(error=>console.warn('system_request_log_failed',error instanceof Error?error.message:'unknown'));
+   ctx.waitUntil(task);
+  }
+ }
+}};
 export default withGasAccess(worker);
