@@ -8,7 +8,7 @@ import {TERMS_VERSION} from '../cloudflare/auth/terms.mjs';
 function createTestDb(){
  const sqlite=new DatabaseSync(':memory:');
  sqlite.exec(readFileSync(new URL('../cloudflare/auth/schema.sql',import.meta.url),'utf8'));
- for(const name of ['2026-11-17-visual-modes.sql','2026-11-19-master-grants.sql','2026-11-19-request-logs.sql','2026-11-19-account-presence.sql']){
+ for(const name of ['2026-11-17-visual-modes.sql','2026-11-19-master-grants.sql','2026-11-19-request-logs.sql','2026-11-19-account-presence.sql','2026-11-19-system-logs.sql']){
   sqlite.exec(readFileSync(new URL('../cloudflare/auth/migrations/'+name,import.meta.url),'utf8'));
  }
  sqlite.exec(`
@@ -138,5 +138,31 @@ test('presence tracks visible tabs separately and admins can see current viewers
  assert.equal((await send('/session?presence='+tabA,'GET',undefined,member)).status,200);
  assert.equal(await viewing(),true,'session verification refreshes presence');
  assert.equal((await send('/presence','POST',{tabId:'invalid',visible:true},member)).status,400);
+ sqlite.close();
+});
+
+test('system-wide request logs are master-only, recent and filterable',async()=>{
+ const sqlite=createTestDb();
+ const db={prepare(sql){return{bind(...args){return{async first(){return sqlite.prepare(sql).get(...args)||null;},async run(){const r=sqlite.prepare(sql).run(...args);return{meta:{changes:Number(r.changes)}};},async all(){return{results:sqlite.prepare(sql).all(...args)};}};}};}};
+ const env={DB:db,ALLOWED_ORIGINS:'https://example.test',MASTER_USERNAME:'xerox0521'};
+ const send=(path,method='GET',data,session)=>worker.fetch(new Request('https://worker.test/api/account'+path,{method,headers:{Origin:'https://example.test','Content-Type':'application/json',...(session?{Cookie:session}:{})},...(data?{body:JSON.stringify(data)}:{})}),env);
+ const register=async(username)=>{const response=await send('/register','POST',{username,password:'secure test password 123',termsAccepted:true,termsVersion:TERMS_VERSION});assert.equal(response.status,200);return response.headers.get('set-cookie').split(';')[0];};
+ const owner=await register('Xerox0521'),member=await register('logged_member');
+ const rows=(await (await send('/admin/accounts','GET',undefined,owner)).json()).accounts;
+ const memberId=rows.find(x=>x.username==='logged_member').id;
+ const now=Date.now();
+ sqlite.prepare('INSERT INTO system_request_logs(user_id,at,route,method,status,duration_ms) VALUES(?,?,?,?,?,?)').run(memberId,now,'/api/search','GET',200,35);
+ sqlite.prepare('INSERT INTO system_request_logs(user_id,at,route,method,status,duration_ms) VALUES(?,?,?,?,?,?)').run(null,now,'/api/account/login','POST',401,12);
+ sqlite.prepare('INSERT INTO system_request_logs(user_id,at,route,method,status,duration_ms) VALUES(?,?,?,?,?,?)').run(null,now-8*86400000,'/api/old','GET',500,10);
+ assert.equal((await send('/admin/system-logs','GET',undefined,member)).status,404);
+ const response=await send('/admin/system-logs','GET',undefined,owner);
+ assert.equal(response.status,200);
+ const data=await response.json();
+ assert.equal(data.logs.length,2);
+ assert.equal(data.logs[0].username,'logged_member');
+ assert.equal(data.logs[1].username,null);
+ assert.equal((await (await send('/admin/system-logs?userId='+memberId,'GET',undefined,owner)).json()).logs.length,1);
+ assert.equal((await (await send('/admin/system-logs?errors=1','GET',undefined,owner)).json()).logs.length,1);
+ assert.equal((await (await send('/admin/system-logs?after='+data.nextAfter,'GET',undefined,owner)).json()).logs.length,0);
  sqlite.close();
 });
