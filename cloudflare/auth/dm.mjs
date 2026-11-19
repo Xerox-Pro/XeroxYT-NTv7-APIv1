@@ -46,7 +46,7 @@ export async function handleDm(request,env,user,admin){
   return reply({messages:(rows.results||[]).map(row=>({id:row.id,mine:row.sender===user.id,text:row.body,createdAt:row.created_at}))});
  }
  if(method!=='POST')return reply({error:'未対応の操作です。'},405);
- if(match[2]==='unban'&&admin){const target=thread.a===user.id?thread.b:thread.a;await db.prepare('UPDATE account_controls SET banned=0,updated_at=? WHERE user_id=?').bind(now,target).run();await db.prepare('DELETE FROM login_attempts WHERE key=? OR key LIKE ?').bind('abuse-penalty:'+target,'youtube-rate:%:'+target).run();return reply({ok:true});}
+ if(match[2]==='unban'&&admin){const target=thread.a===user.id?thread.b:thread.a;await db.prepare('UPDATE account_controls SET banned=0,updated_at=? WHERE user_id=?').bind(now,target).run();try{await db.prepare('DELETE FROM login_attempts WHERE key=? OR key LIKE ?').bind('abuse-penalty:'+target,'youtube-rate:%:'+target).run();}catch(error){console.warn('DM unban rate-limit cleanup failed:',error instanceof Error?error.message:'unknown');}return reply({ok:true});}
  if(match[2]==='accept'){
   if(thread.status!=='pending'||thread.initiator===user.id)return reply({error:'承諾できません。'},409);
   await db.prepare("UPDATE dm_threads SET status='accepted',updated_at=? WHERE id=? AND status='pending'").bind(now,thread.id).run();return reply({ok:true});
