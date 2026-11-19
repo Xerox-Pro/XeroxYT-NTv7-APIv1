@@ -109,12 +109,37 @@ export default {
           await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen,page,title) VALUES(?,?,?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen,page=excluded.page,title=excluded.title').bind(user.id,body.tabId,Date.now(),page,title).run();
           if(Math.random()<0.01)await env.DB.prepare('DELETE FROM account_presence WHERE last_seen<?').bind(Date.now()-86400000).run();
         }else await env.DB.prepare('DELETE FROM account_presence WHERE user_id=? AND tab_id=?').bind(user.id,body.tabId).run();
+        if(body.visible){
+          const mode=await env.DB.prepare('SELECT mode FROM account_visual_modes WHERE user_id=?').bind(user.id).first();
+          return json({ok:true,mode:mode?.mode||'off'});
+        }
         return json({ok:true});
       }
       if(path==='/admin/releases'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         const latest=await env.DB.prepare("SELECT version,published_at,checked_at FROM client_releases WHERE channel='gas'").bind().first();
         const devices=await env.DB.prepare('SELECT u.username,d.device_id,d.version,d.applied_at,d.last_seen,d.last_error FROM device_releases d JOIN users u ON u.id=d.user_id ORDER BY d.last_seen DESC LIMIT 200').bind().all();return json({latest,devices:devices.results||[]});
+      }
+      if(path==='/sidecar'&&request.method==='GET'){
+        // One authenticated Worker request replaces three independent metadata
+        // requests previously made alongside ordinary YouTube API reads.
+        const [modeRow,profile]=await Promise.all([
+          env.DB.prepare('SELECT mode FROM account_visual_modes WHERE user_id=?').bind(user.id).first(),
+          env.DB.prepare('SELECT nickname FROM dm_profiles WHERE user_id=?').bind(user.id).first(),
+        ]);
+        const data={mode:modeRow?.mode||'off'};
+        if(profile){
+          const [threads,rooms]=await Promise.all([
+            env.DB.prepare('SELECT t.id,t.initiator,t.status,t.kind,t.updated_at,p.nickname,peer.username AS applicant_id,(SELECT sender FROM dm_messages WHERE thread_id=t.id ORDER BY created_at DESC,id DESC LIMIT 1)=? AS last_mine FROM dm_threads t LEFT JOIN dm_profiles p ON p.user_id=CASE WHEN t.a=? THEN t.b ELSE t.a END LEFT JOIN users peer ON peer.id=p.user_id WHERE t.a=? OR t.b=? ORDER BY t.updated_at DESC LIMIT 100').bind(user.id,user.id,user.id,user.id).all(),
+            env.DB.prepare("SELECT r.id,r.name,r.visibility,m.status,(SELECT MAX(created_at) FROM dm_room_messages WHERE room_id=r.id) AS lastAt,(SELECT sender FROM dm_room_messages WHERE room_id=r.id ORDER BY created_at DESC,id DESC LIMIT 1)=? AS lastMine,CASE WHEN r.owner=? THEN 1 ELSE 0 END AS owned FROM dm_rooms r LEFT JOIN dm_members m ON m.room_id=r.id AND m.user_id=? WHERE r.visibility IN ('open','public') OR m.user_id=? ORDER BY r.created_at LIMIT 100").bind(user.id,user.id,user.id,user.id).all(),
+          ]);
+          const admin=isMaster(user,env);
+          data.threads=(threads.results||[])
+            .filter(t=>(t.status!=='pending'||t.initiator!==user.id)&&(admin||t.kind==='appeal'||(!user.banned&&!user.traffic_stopped)))
+            .map(t=>({id:t.id,status:t.status,kind:t.kind,incoming:t.initiator!==user.id,updatedAt:t.updated_at,lastMine:t.last_mine===1,...(admin&&t.kind==='appeal'?{applicantId:t.applicant_id}:{}),label:t.kind==='appeal'?'BAN解除申請':t.status==='accepted'?(t.nickname||'匿名の会話'):'匿名の申請'}));
+          data.rooms=rooms.results||[];
+        }
+        return json(data);
       }
       if(path==='/visual-mode'&&request.method==='GET'){
         const row=await env.DB.prepare('SELECT mode FROM account_visual_modes WHERE user_id=?').bind(user.id).first();
