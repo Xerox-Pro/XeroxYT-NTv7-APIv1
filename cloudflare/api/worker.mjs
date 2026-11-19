@@ -30,6 +30,28 @@ async function handleRequest(request,env,ctx){
  }catch(error){console.warn(JSON.stringify({event:'api_proxy_error',name:error.name||'Error',reason:/[\w.$]+ is not a function/.exec(error.message)?.[0]||(/I\/O/.test(error.message)?'request_context':'other'),frames:String(error.stack||'').split('\n').slice(1,3)}));response=Response.json({error:'サーバーとの通信に失敗しました。再試行してください。',code:'API_UPSTREAM_FAILED'},{status:502});}
  const headers=new Headers(response.headers);for(const[k,v]of Object.entries(cors))headers.set(k,v);headers.set('X-XeroxYT-Proxy','cloudflare');return new Response(response.body,{status:response.status,headers});
 }
+// Monitoring is OFF by default. Cache the setting briefly to avoid a D1 read
+// for every video/API request; the switch propagates within a few seconds.
+let monitorState={enabled:false,expires:0,pending:null};
+async function systemMonitorEnabled(db){
+ const now=Date.now();
+ if(now<monitorState.expires)return monitorState.enabled;
+ if(monitorState.pending)return monitorState.pending;
+ monitorState.pending=db.prepare('SELECT enabled FROM system_monitor_settings WHERE id=1').first()
+  .then(row=>{
+   monitorState.enabled=row?.enabled===1;
+   monitorState.expires=Date.now()+3000;
+   return monitorState.enabled;
+  })
+  .catch(error=>{
+   console.warn('system_monitor_state_failed',error instanceof Error?error.message:'unknown');
+   monitorState.enabled=false;
+   monitorState.expires=Date.now()+3000;
+   return false;
+  })
+  .finally(()=>{monitorState.pending=null;});
+ return monitorState.pending;
+}
 // Store operation-level API metadata only: never URLs, query strings, request bodies, or headers.
 function safeOperation(pathname){
  const parts=pathname.split('/').filter(Boolean).slice(0,5);
@@ -68,9 +90,10 @@ const worker={async fetch(request,env,ctx){
   // Cloudflare waitUntil writes the log without delaying API responses or video streaming.
   if(env.DB&&ctx?.waitUntil&&request.method!=='OPTIONS'
     &&/^\/(?:api(?:\/|$)|stream\/|360\/|edu\/|scratch-edu\/)/.test(path)
-    &&!/^\/api\/account\/(?:telemetry|admin\/(?:logs|system-logs))(?:\/|$)/.test(path)){
+    &&!/^\/api\/account\/(?:telemetry|admin\/(?:logs|system-logs|system-monitor))(?:\/|$)/.test(path)){
    const route=safeOperation(path);
-   const task=recordSystemRequest(request,env,route,response?.status||500,Date.now()-started)
+   const task=systemMonitorEnabled(env.DB)
+     .then(enabled=>enabled?recordSystemRequest(request,env,route,response?.status||500,Date.now()-started):undefined)
      .catch(error=>console.warn('system_request_log_failed',error instanceof Error?error.message:'unknown'));
    ctx.waitUntil(task);
   }
