@@ -86,6 +86,13 @@ test('only Xerox0521 may grant master access, even when caller is already a mast
  const path=id=>'/admin/accounts/'+id;
  assert.equal((await send(path(delegateId),'POST',{action:'master',enabled:true},owner)).status,200);
  assert.equal((await (await send('/session','GET',undefined,delegate)).json()).user.admin,true);
+ assert.equal((await send('/admin/accounts','GET',undefined,delegate)).status,200,'delegated master can list accounts');
+ assert.equal((await send(path(memberId),'POST',{action:'visualMode',mode:'chaos'},delegate)).status,200,'delegated master can set visual mode');
+ assert.equal((await (await send('/visual-mode','GET',undefined,member)).json()).mode,'chaos');
+ assert.equal((await send(path(memberId),'POST',{action:'ban',enabled:true},delegate)).status,200,'delegated master can ban regular accounts');
+ assert.equal((await send(path(memberId),'POST',{action:'ban',enabled:false},delegate)).status,200,'delegated master can unban regular accounts');
+ assert.equal((await send(path(memberId),'POST',{action:'traffic',enabled:true},delegate)).status,200,'delegated master can stop traffic');
+ assert.equal((await send(path(memberId),'POST',{action:'traffic',enabled:false},delegate)).status,200,'delegated master can restore traffic');
  const denied=await send(path(memberId),'POST',{action:'master',enabled:true},delegate);
  assert.equal(denied.status,403,'delegated master must not grant another master');
  assert.match((await denied.json()).error,/Xerox0521/);
