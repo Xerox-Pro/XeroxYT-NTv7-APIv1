@@ -67,7 +67,8 @@ export default {
         // Existing session checks refresh the current visible tab without a separate heartbeat.
         const tabId=url.searchParams.get('presence');
         if(tabId&&/^[a-f0-9]{32}$/.test(tabId))await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen) VALUES(?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen').bind(user.id,tabId,Date.now()).run();
-        return json({ user:{...publicUser(user,env),termsAccepted:await hasTerms(env.DB,user.id)} });
+        const [termsAccepted,historyRow]=await Promise.all([hasTerms(env.DB,user.id),env.DB.prepare('SELECT version FROM history WHERE user_id=?').bind(user.id).first()]);
+        return json({ user:{...publicUser(user,env),termsAccepted},historyVersion:historyRow?.version||0 });
       }
       if (request.method === 'POST' && (path === '/register' || path === '/login')) {
         const body = await requestJson(request);
