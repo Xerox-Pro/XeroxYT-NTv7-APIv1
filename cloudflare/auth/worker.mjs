@@ -63,10 +63,14 @@ export default {
         if(!user)return json({ error: 'ログインが必要です。' }, 401);
         if(user.banned)return json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403);
         if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
-        await recordUsage(env.DB,user,request);
+        // Checking an existing session must not depend on a D1 usage-statistics write.
+        // D1 write-limit failures should not turn a valid login into HTTP 500.
         // Existing session checks refresh the current visible tab without a separate heartbeat.
         const tabId=url.searchParams.get('presence');
-        if(tabId&&/^[a-f0-9]{32}$/.test(tabId))await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen) VALUES(?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen').bind(user.id,tabId,Date.now()).run();
+        if(tabId&&/^[a-f0-9]{32}$/.test(tabId)) {
+          try { await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen) VALUES(?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen').bind(user.id,tabId,Date.now()).run(); }
+          catch { /* Presence is optional and must not prevent session verification. */ }
+        }
         return json({ user:{...publicUser(user,env),termsAccepted:await hasTerms(env.DB,user.id)} });
       }
       if (request.method === 'POST' && (path === '/register' || path === '/login')) {
