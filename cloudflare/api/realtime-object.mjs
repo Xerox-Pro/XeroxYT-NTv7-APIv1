@@ -1,4 +1,5 @@
 import {DurableObject} from 'cloudflare:workers';
+import {sendRelay} from './realtime.mjs';
 import {createD1Database} from '../../d1-rest.mjs';
 
 // Hibernating sockets carry invalidations only. All private reads still go
@@ -7,7 +8,28 @@ export class RealtimeChannel extends DurableObject {
  constructor(ctx, env) {
   super(ctx, env);
   ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS pending_notifications(type TEXT PRIMARY KEY, due INTEGER NOT NULL)');
+  ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS relay_queue(key TEXT PRIMARY KEY, id TEXT NOT NULL, payload TEXT NOT NULL, due INTEGER NOT NULL, attempts INTEGER NOT NULL)');
   ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+ }
+
+ invalidateMonitor() {
+  return this.ctx.storage.delete('monitor');
+ }
+
+ async enqueueRelay(payload) {
+  const key = JSON.stringify([payload.event,payload.userId,payload.sessionHash]);
+  this.ctx.storage.sql.exec(
+   'INSERT INTO relay_queue VALUES(?,?,?,?,0) ON CONFLICT(key) DO UPDATE SET id=excluded.id,payload=excluded.payload',
+   key,crypto.randomUUID(),JSON.stringify(payload),Date.now()+250,
+  );
+  await this.scheduleAlarm();
+ }
+
+ async scheduleAlarm() {
+  const next=this.ctx.storage.sql.exec('SELECT MIN(due) AS due FROM (SELECT due FROM relay_queue UNION ALL SELECT due FROM pending_notifications)').one().due;
+  if(next===null)return;
+  const current=await this.ctx.storage.getAlarm();
+  if(current===null||next<current)await this.ctx.storage.setAlarm(next);
  }
 
  async monitorEnabled() {
@@ -48,8 +70,7 @@ export class RealtimeChannel extends DurableObject {
    if (!this.ctx.getWebSockets().length) return;
    const due = this.ctx.storage.sql.exec('SELECT due FROM pending_notifications LIMIT 1').toArray()[0]?.due;
    this.ctx.storage.sql.exec('INSERT OR IGNORE INTO pending_notifications(type,due) VALUES(?,?)', type, due ?? now+2000);
-   if (!due) return this.ctx.storage.setAlarm(now+2000);
-   return;
+   return this.scheduleAlarm();
   }
   this.send(type, sessionHash || userId);
  }
@@ -69,9 +90,22 @@ export class RealtimeChannel extends DurableObject {
   }
  }
 
- alarm() {
-  const pending = this.ctx.storage.sql.exec('DELETE FROM pending_notifications RETURNING type').toArray();
+ async alarm() {
+  const sql=this.ctx.storage.sql;
+  const now=Date.now();
+  const pending = sql.exec('DELETE FROM pending_notifications WHERE due<=? RETURNING type',now).toArray();
   for (const {type} of pending) this.send(type);
+  const queue=sql.exec('SELECT * FROM relay_queue WHERE due<=? ORDER BY due LIMIT 10',now).toArray();
+  await Promise.all(queue.map(async ({id,payload,attempts})=>{
+   try {
+    await sendRelay(this.env,JSON.parse(payload));
+    sql.exec('DELETE FROM relay_queue WHERE id=?',id);
+   } catch {
+    const delay=Math.min(300000,1000*2**Math.min(attempts,9));
+    sql.exec('UPDATE relay_queue SET due=?,attempts=attempts+1 WHERE id=?',Date.now()+delay,id);
+   }
+  }));
+  await this.scheduleAlarm();
  }
 
  webSocketMessage() {}

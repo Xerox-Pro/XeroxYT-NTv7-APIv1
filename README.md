@@ -163,6 +163,6 @@ Upstream availability is conditional. TikWM currently reports a daily free API q
 
 API Worker を先にデプロイします。既存の Worker 名・D1 バインディング・Secret・Origin 設定を保持し、本番 Wrangler 設定に `REALTIME` バインディングと SQLite クラス `RealtimeChannel` のマイグレーションを追加してください。既存のマイグレーションがあれば末尾へ追加します。Vercel の `API_BASE_URL_1` はこの主系 Worker を指します。ブラウザーは Vercel 経由で短命のチケットを取得し、Cloudflare に WebSocket を開きます。
 
-別の Cloudflare アカウントに副系 Worker がある場合は、主系と副系の両方に同じ `REALTIME_RELAY_SECRET` を Worker Secret として設定します。副系にだけ `REALTIME_RELAY_URL` として主系の HTTPS Worker Origin を設定します。副系からの BAN・DM・管理イベントも主系の Durable Objects へ届きます。副系には `REALTIME` バインディングとクラスのマイグレーションは不要です。
+主系・副系の両方に `REALTIME` バインディングとマイグレーションを追加します。両方に同じ `REALTIME_RELAY_SECRET` を設定し、`REALTIME_RELAY_URL` には相手側の HTTPS Worker Origin を設定します。両系で同じアカウント用・管理用 D1 を参照します。どちらでも接続と更新ができ、中継先の停止中は Durable Object に通知を保存して再送します。再接続時は共有 D1 の最新状態を取得します。
 
-API 側の準備後に Vercel フロントエンドをデプロイし、別々のブラウザーセッションで BAN と解除、モード変更、DM、グループDM、管理画面の一覧と通信ログを確認してください。
+両 Worker の準備後に Vercel フロントエンドをデプロイし、別セッションで BAN・解除、モード、DM、グループDM、管理画面を確認してください。

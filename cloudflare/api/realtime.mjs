@@ -61,22 +61,17 @@ export async function receiveRealtimeRelay(request, env) {
  try { body = new TextDecoder().decode(await boundedBytes(request,1024)); }
  catch { return new Response(null,{status:413}); }
  if (!timingSafeEqual(supplied,relayMac(env.REALTIME_RELAY_SECRET,body))) return new Response(null,{status:403});
- const {channel,event,userId,sessionHash,at,enabled,updatedAt} = JSON.parse(body);
+ const {channel,event,userId,sessionHash,at} = JSON.parse(body);
  if (!Number.isSafeInteger(at) || Math.abs(Date.now()-at)>30000) return new Response(null,{status:403});
- if (channel==='admin' && event==='monitor-read') {
-  return Response.json({enabled:await env.REALTIME.getByName(adminChannel).monitorEnabled()});
- }
- if (channel==='admin' && event==='monitor-write' && typeof enabled==='boolean' && Number.isSafeInteger(updatedAt)) {
-  await env.REALTIME.getByName(adminChannel).setMonitor(enabled,updatedAt);
-  return new Response(null,{status:204});
- }
  if (channel!=='admin' && !/^account:[A-Za-z0-9_-]{1,64}$/.test(channel)) return new Response(null,{status:400});
  if (!['mode','banned','unbanned','session','dm','rooms','accounts','logs','monitor'].includes(event)) return new Response(null,{status:400});
- await env.REALTIME.getByName(channel).publish(event,userId,sessionHash);
+ const target=env.REALTIME.getByName(channel);
+ if(event==='monitor')await target.invalidateMonitor();
+ await target.publish(event,userId,sessionHash);
  return new Response(null,{status:204});
 }
 
-async function sendRelay(env, event) {
+export async function sendRelay(env, event) {
  const target = new URL(relayPath, env.REALTIME_RELAY_URL);
  if (target.protocol!=='https:' || !target.hostname.endsWith('.workers.dev') || !env.REALTIME_RELAY_SECRET) throw Error('Invalid realtime relay configuration');
  const body = JSON.stringify({...event,at:Date.now()});
@@ -89,19 +84,13 @@ async function sendRelay(env, event) {
 }
 
 export async function readSystemMonitor(env) {
- if (env.REALTIME_RELAY_URL) {
-  const response = await sendRelay(env,{channel:adminChannel,event:'monitor-read'});
-  return (await response.json()).enabled===true;
- }
  if (env.REALTIME) return env.REALTIME.getByName(adminChannel).monitorEnabled();
  const row = await env.DB.prepare('SELECT enabled FROM system_monitor_settings WHERE id=1').first();
  return row?.enabled===1;
 }
 
 export async function updateSystemMonitor(env, enabled, updatedAt) {
- if (env.REALTIME_RELAY_URL) {
-  await sendRelay(env,{channel:adminChannel,event:'monitor-write',enabled,updatedAt});
- } else if (env.REALTIME) {
+ if (env.REALTIME) {
   await env.REALTIME.getByName(adminChannel).setMonitor(enabled,updatedAt);
  }
  await notifyAdmin(env,'monitor');
@@ -109,9 +98,10 @@ export async function updateSystemMonitor(env, enabled, updatedAt) {
 
 async function publish(env, channel, event, userId, sessionHash) {
  try {
-  if (env.REALTIME_RELAY_URL) {
-   await sendRelay(env,{channel,event,userId,sessionHash});
-  } else if (env.REALTIME) {
+  if (!env.REALTIME) return;
+  const target=env.REALTIME.getByName(channel);
+  await target.publish(event,userId,sessionHash);
+  if(env.REALTIME_RELAY_URL)await target.enqueueRelay({channel,event,userId,sessionHash}); else if (env.REALTIME) {
    await env.REALTIME.getByName(channel).publish(event, userId, sessionHash);
   }
  } catch (error) {
