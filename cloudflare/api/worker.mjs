@@ -34,7 +34,7 @@ async function handleRequest(request,env,ctx){
  if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
  let response;
  try{
-  const user=await currentUser(request,env.DB);
+  const user=await currentUser(request,env.DB,env);
   trackLastCommunication(user,request,env,ctx);
   if(user?.banned)return bannedResponse();
   if(path==='/internal/youtube-store'){const denied=authorizeSource(request,{...env,REQUIRE_PROXY_SECRET:'true'});if(denied)return denied;return await handleYouTubeStore(request,env.DB);}

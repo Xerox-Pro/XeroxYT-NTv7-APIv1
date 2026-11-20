@@ -1,3 +1,4 @@
+import {managementDb,mergeControls,readControls,setControl} from './managed-controls.mjs';
 import {listAdminActions,recordAdminAction} from './admin-audit.mjs';
 import {requestJson} from '../security/http.mjs';
 import {handleDm} from './dm.mjs';
@@ -14,10 +15,11 @@ export const bannedResponse = (headers) => json({error:'このアカウントは
 const validUser = name => typeof name === 'string' && /^[a-z0-9_]{3,32}$/.test(name);
 const validPass = password => typeof password === 'string' && password.length >= 12 && Buffer.byteLength(password) <= 256;
 
-export async function currentUser(request, db) {
+export async function currentUser(request, db, env={DB:db}) {
   const token = /(?:^|;\s*)__Host-xy_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get('Cookie') || '')?.[1];
   if (!token) return null;
-  return db.prepare('SELECT users.id, users.username, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(hash(token), Date.now()).first();
+  const user=await db.prepare('SELECT users.id, users.username, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(hash(token), Date.now()).first();
+  return readControls(env,user);
 }
 const isOwner = user => user?.username?.toLowerCase() === 'xerox0521';
 const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&(isOwner(user)||user.username===env.MASTER_USERNAME.trim().toLowerCase()||user.master_granted===1);
@@ -35,7 +37,6 @@ async function linkDevice(db, device, userId) {
   await db.prepare('INSERT INTO account_devices(device_hash,user_id) VALUES(?,?) ON CONFLICT(device_hash) DO NOTHING').bind(device,userId).run();
 }
 const duplicateDevice = () => json({error:'このブラウザではすでにアカウントを使用しています。既存のアカウントでログインしてください。',code:'DEVICE_ALREADY_REGISTERED'},409);
-const managementDb = env => env.MANAGEMENT_DB ?? env.DB;
 async function accountManagement(env,userId) {
   const row=await managementDb(env).prepare('SELECT mode,monitoring FROM account_management WHERE user_id=?').bind(userId).first();
   const legacy=row?.mode==null?await env.DB.prepare('SELECT mode FROM account_visual_modes WHERE user_id=?').bind(userId).first():null;
@@ -63,7 +64,7 @@ export default {
         if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return json({ error: '不正な形式です。' }, 415);
       }
       if (Number(request.headers.get('content-length') || 0) > 131072) return json({ error: 'データが大きすぎます。' }, 413);
-      const sessionUser=gatewayUser===undefined?await currentUser(request,env.DB):gatewayUser;
+      const sessionUser=gatewayUser===undefined?await currentUser(request,env.DB,env):gatewayUser;
       if(sessionUser?.banned)return bannedResponse();
       if(path==='/client-release')return clientRelease(request,env,sessionUser);
       if(path==='/terms'){
@@ -101,8 +102,8 @@ export default {
         if (path === '/register') {
           if (sessionUser) return duplicateDevice();
           if (!device) return json({error:'ブラウザの登録情報を確認できません。ページを開き直してください。',code:'DEVICE_REQUIRED'},400);
-          const known = await env.DB.prepare('SELECT account_controls.banned FROM account_devices LEFT JOIN account_controls USING(user_id) WHERE device_hash=?').bind(device).first();
-          if (known?.banned) return bannedResponse();
+          const known = await env.DB.prepare('SELECT account_devices.user_id AS id,account_controls.banned FROM account_devices LEFT JOIN account_controls USING(user_id) WHERE device_hash=?').bind(device).first();
+          if ((await readControls(env,known))?.banned) return bannedResponse();
           if (known) return duplicateDevice();
           if(body.termsAccepted!==true||body.termsVersion!==TERMS_VERSION)return termsRequired();
           const salt = randomBytes(16).toString('hex');
@@ -115,10 +116,11 @@ export default {
           await env.DB.prepare('INSERT INTO user_terms_acceptances(user_id,version,accepted_at) VALUES(?,?,?)').bind(user.id,TERMS_VERSION,Date.now()).run();
           return startSession(env.DB,user,env);
         }
-        const user = await env.DB.prepare('SELECT users.id, users.username, users.password_hash, users.password_salt, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE users.username = ?').bind(username).first();
-        const actual = passHash(password, user?.password_salt || '00000000000000000000000000000000');
-        const expected = user?.password_hash || '0'.repeat(64);
-        if (!timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex')) || !user) return json({ error: 'ユーザー名またはパスワードが違います。' }, 401);
+        const storedUser = await env.DB.prepare('SELECT users.id, users.username, users.password_hash, users.password_salt, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE users.username = ?').bind(username).first();
+        const actual = passHash(password, storedUser?.password_salt || '00000000000000000000000000000000');
+        const expected = storedUser?.password_hash || '0'.repeat(64);
+        if (!timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex')) || !storedUser) return json({ error: 'ユーザー名またはパスワードが違います。' }, 401);
+        const user=await readControls(env,storedUser);
         if(body.termsAccepted===true&&body.termsVersion===TERMS_VERSION)await env.DB.prepare('INSERT OR IGNORE INTO user_terms_acceptances(user_id,version,accepted_at) VALUES(?,?,?)').bind(user.id,TERMS_VERSION,Date.now()).run();
         try { await linkDevice(env.DB,device,user.id); }
         catch(error) { console.warn('ACCOUNT_DEVICE_LINK_FAILED',error?.code||'D1'); }
@@ -212,17 +214,19 @@ export default {
       if(path==='/admin/accounts'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         const result=await env.DB.prepare("SELECT users.id,users.username,users.created_at,CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped,COALESCE(SUM(account_usage.requests),0) AS requests,COALESCE(SUM(account_usage.videos),0) AS videos,COALESCE(SUM(account_usage.searches),0) AS searches,MAX(account_usage.last_seen) AS last_seen FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id LEFT JOIN account_usage ON account_usage.user_id=users.id GROUP BY users.id ORDER BY users.created_at DESC").bind().all();
-        const [legacyModes, settings] = await Promise.all([
+        const [legacyModes, settings, controls] = await Promise.all([
           env.DB.prepare('SELECT user_id,mode FROM account_visual_modes').bind().all(),
           managementDb(env).prepare('SELECT user_id,mode,monitoring FROM account_management').bind().all(),
+          env.MANAGEMENT_DB?.prepare('SELECT user_id,banned,traffic_stopped FROM managed_account_controls').bind().all()??{results:[]},
         ]);
         const legacyById=new Map((legacyModes.results||[]).map(row=>[row.user_id,row.mode]));
+        const controlsById=new Map((controls.results||[]).map(row=>[row.user_id,row]));
         const byId=new Map((settings.results||[]).map(row=>[row.user_id,row]));
         // Only foreground tabs checked in within 90 seconds count as viewing.
         const active=await env.DB.prepare('SELECT user_id,page,title,last_seen FROM account_presence WHERE last_seen>=? ORDER BY last_seen DESC').bind(Date.now()-90000).all();
         const viewingByUser=new Map();
         for(const row of active.results||[])if(!viewingByUser.has(row.user_id))viewingByUser.set(row.user_id,row);
-        return json({accounts:(result.results||[]).map(row=>({...row,is_master:isMaster(row,env),visual_mode:byId.get(row.id)?.mode??legacyById.get(row.id)??'off',monitoring:byId.get(row.id)?.monitoring===1,viewing:viewingByUser.has(row.id),viewing_page:viewingByUser.get(row.id)?.page||'',viewing_title:viewingByUser.get(row.id)?.title||''}))});
+        return json({accounts:(result.results||[]).map(row=>({...mergeControls(row,controlsById.get(row.id)),is_master:isMaster(row,env),visual_mode:byId.get(row.id)?.mode??legacyById.get(row.id)??'off',monitoring:byId.get(row.id)?.monitoring===1,viewing:viewingByUser.has(row.id),viewing_page:viewingByUser.get(row.id)?.page||'',viewing_title:viewingByUser.get(row.id)?.title||''}))});
       }
       const adminMatch=/^\/admin\/accounts\/([0-9a-f-]{36})$/.exec(path);
       if(adminMatch&&request.method==='POST'){
@@ -273,15 +277,15 @@ export default {
         }
         if(action==='ban'||action==='traffic'){
           if(typeof body.enabled!=='boolean')return json({error:'有効・無効の指定が不正です。'},400);
-          const column=action==='ban'?'banned':'traffic_stopped',enabled=Number(body.enabled);
-          const old=await env.DB.prepare(`SELECT ${column} AS enabled FROM account_controls WHERE user_id=?`).bind(targetId).first();
-          await env.DB.prepare(`INSERT INTO account_controls(user_id,${column},updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`).bind(targetId,enabled,Date.now()).run();
+          const before=await readControls(env,await env.DB.prepare('SELECT users.id,account_controls.banned,account_controls.traffic_stopped FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id WHERE users.id=?').bind(targetId).first());
+          const enabled=body.enabled;
+          await setControl(env,targetId,action,enabled);
           if(action==='ban'&&!enabled){try{await env.DB.prepare('DELETE FROM login_attempts WHERE key=? OR key LIKE ?').bind('abuse-penalty:'+targetId,'youtube-rate:%:'+targetId).run();}catch(error){console.warn('Post-unban rate-limit cleanup failed:',error instanceof Error?error.message:'unknown');}}
           // Keep a banned account's session only so every device can receive the
           // explicit BAN response and persist its lock screen. All account data
           // routes remain blocked above. Traffic stops still revoke sessions.
           if(enabled&&action==='traffic'){try{await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();}catch(error){console.warn('Traffic session cleanup failed:',error instanceof Error?error.message:'unknown');}}
-          return audited(old?.enabled===1,body.enabled);
+          return audited((action==='ban'?before.banned:before.traffic_stopped)===1,enabled);
         }
         return json({error:'操作が不正です。'},400);
       }

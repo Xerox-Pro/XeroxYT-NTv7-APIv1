@@ -18,6 +18,7 @@ test('admins can set burning and monitoring independently for each account', asy
  management.exec(readFileSync(new URL('../cloudflare/auth/migrations/2026-11-20-admin-audit.sql',import.meta.url),'utf8'));
  sqlite.exec('CREATE TABLE account_controls(user_id TEXT PRIMARY KEY,banned INTEGER DEFAULT 0,traffic_stopped INTEGER DEFAULT 0,updated_at INTEGER)');
  sqlite.exec('CREATE TABLE login_attempts(key TEXT)');
+ management.exec(readFileSync(new URL('../cloudflare/auth/migrations/2026-11-20-management-controls.sql',import.meta.url),'utf8'));
  const adapter=sqlite=>({prepare(sql){return {bind(...args){return {
   all:async()=>({results:sqlite.prepare(sql).all(...args)}),
   first:async()=>sqlite.prepare(sql).get(...args)??null,
@@ -41,6 +42,8 @@ test('admins can set burning and monitoring independently for each account', asy
  assert.deepEqual(await state(alice),{mode:'burning',monitoring:false});
  const ban=await call('/admin/accounts/'+alice.id,admin,{action:'ban',enabled:true});
  assert.deepEqual(await ban.json(),{ok:true,auditRecorded:true});
+ assert.equal(management.prepare('SELECT banned FROM managed_account_controls WHERE user_id=?').get(alice.id).banned,1);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM account_controls').get().n,0);
  const historyPath='/admin/action-history';
  assert.equal((await call(historyPath,bob)).status,404);
  const {entries}=await (await call(historyPath,admin)).json();

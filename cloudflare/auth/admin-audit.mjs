@@ -1,3 +1,4 @@
+import {readControls,setControl} from './managed-controls.mjs';
 const columns = 'id,at,actor,target_id,target,action,before_value,after_value';
 
 export async function recordAdminAction(env, actor, target, action, before = null, after = null) {
@@ -35,7 +36,8 @@ export async function recordModerationBan(env, actor, targetId, enabled) {
   if (target.username==='xerox0521' || (enabled && (target.master_grant || target.username===String(env.MASTER_USERNAME||'').trim().toLowerCase()))) {
     return {error:'保護対象のアカウントは変更できません。', status:403};
   }
-  await db.prepare('INSERT INTO account_controls(user_id,banned,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET banned=excluded.banned,updated_at=excluded.updated_at')
-    .bind(targetId,Number(enabled),Date.now()).run();
-  return {ok:true,auditRecorded:await recordAdminAction(env,actor,target,'ban',target.banned===1,enabled)};
+  const before=await readControls(env,target);
+  await setControl(env,targetId,'ban',enabled);
+  return {ok:true,auditRecorded:await recordAdminAction(env,actor,target,'ban',before.banned===1,enabled)};
+
 }
