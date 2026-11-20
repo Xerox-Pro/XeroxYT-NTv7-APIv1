@@ -15,7 +15,11 @@ test('admins can set burning and monitoring independently for each account', asy
  INSERT INTO user_terms_acceptances VALUES ('admin','2026-11-17.1'),('11111111-1111-1111-1111-111111111111','2026-11-17.1'),('22222222-2222-2222-2222-222222222222','2026-11-17.1');`);
  const management=new DatabaseSync(':memory:');
  management.exec(readFileSync(new URL('../cloudflare/auth/migrations/2026-11-20-account-management.sql',import.meta.url),'utf8'));
+ management.exec(readFileSync(new URL('../cloudflare/auth/migrations/2026-11-20-admin-audit.sql',import.meta.url),'utf8'));
+ sqlite.exec('CREATE TABLE account_controls(user_id TEXT PRIMARY KEY,banned INTEGER DEFAULT 0,traffic_stopped INTEGER DEFAULT 0,updated_at INTEGER)');
+ sqlite.exec('CREATE TABLE login_attempts(key TEXT)');
  const adapter=sqlite=>({prepare(sql){return {bind(...args){return {
+  all:async()=>({results:sqlite.prepare(sql).all(...args)}),
   first:async()=>sqlite.prepare(sql).get(...args)??null,
   run:async()=>sqlite.prepare(sql).run(...args),
  };}};}});
@@ -35,6 +39,22 @@ test('admins can set burning and monitoring independently for each account', asy
  assert.deepEqual(await state(bob),{mode:'off',monitoring:false});
  await call('/admin/accounts/'+alice.id,admin,{action:'monitoring',enabled:false});
  assert.deepEqual(await state(alice),{mode:'burning',monitoring:false});
+ const ban=await call('/admin/accounts/'+alice.id,admin,{action:'ban',enabled:true});
+ assert.deepEqual(await ban.json(),{ok:true,auditRecorded:true});
+ const historyPath='/admin/action-history';
+ assert.equal((await call(historyPath,bob)).status,404);
+ const {entries}=await (await call(historyPath,admin)).json();
+ assert.equal(entries.length,4);
+ assert.deepEqual(entries.map(({action,before,after})=>[action,before,after]),[
+  ['ban',false,true],['monitoring',true,false],['monitoring',false,true],['visualMode','mirror','burning'],
+ ]);
+ assert.equal(entries[0].actor,'xerox0521');
+ assert.equal(entries[0].target,'alice');
+ const {entries:older}=await (await call(historyPath+'?before='+entries[0].id,admin)).json();
+ assert.equal(older.length,3);
+ await call('/admin/accounts/'+alice.id,admin,{action:'ban',enabled:entries[0].before});
+ const restored=await (await call(historyPath,admin)).json();
+ assert.equal(restored.entries[0].after,false);
  management.close();
  sqlite.close();
 });

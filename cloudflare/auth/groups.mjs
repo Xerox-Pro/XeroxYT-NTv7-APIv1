@@ -1,3 +1,4 @@
+import {recordModerationBan} from './admin-audit.mjs';
 import {requestJson} from '../security/http.mjs';
 const reply=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'private, no-store'}});
 export async function handleGroups(request,env,user,admin,path,moderate){
@@ -43,7 +44,7 @@ export async function handleGroups(request,env,user,admin,path,moderate){
  if(operation==='leave'){if(room.visibility==='open')return reply({error:'オープンDMは全利用者共通です。'},400);await db.prepare('DELETE FROM dm_members WHERE room_id=? AND user_id=?').bind(room.id,user.id).run();return reply({ok:true});}
  if(operation==='report'||operation==='ban'){
   const message=await db.prepare('SELECT id,sender FROM dm_room_messages WHERE id=? AND room_id=?').bind(String(body.messageId||''),room.id).first();if(!message)return reply({error:'対象メッセージがありません。'},404);
-  if(operation==='ban'){if(!admin)return reply({error:'権限がありません。'},403);if(message.sender===user.id)return reply({error:'自分自身はBANできません。'},400);await db.prepare('INSERT INTO account_controls(user_id,banned,updated_at) VALUES(?,1,?) ON CONFLICT(user_id) DO UPDATE SET banned=1,updated_at=excluded.updated_at').bind(message.sender,now).run();return reply({ok:true});}
+  if(operation==='ban'){if(!admin)return reply({error:'権限がありません。'},403);if(message.sender===user.id)return reply({error:'自分自身はBANできません。'},400);const result=await recordModerationBan(env,user,message.sender,true);return reply(result,result.status||200);}
   await db.prepare('INSERT INTO dm_room_reports(id,room_id,message_id,reporter,reason,created_at) VALUES(?,?,?,?,?,?)').bind(crypto.randomUUID(),room.id,message.id,user.id,String(body.reason||'不適切な発言').slice(0,500),now).run();return reply({ok:true});
  }
  if(operation==='send'){

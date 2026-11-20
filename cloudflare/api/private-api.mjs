@@ -1,3 +1,4 @@
+import {recordAdminAction} from '../auth/admin-audit.mjs';
 import {boundedBytes} from '../security/http.mjs';
 import {privateRateLimit} from './private-rate-limit.mjs';
 import {createHmac,timingSafeEqual,createHash} from 'node:crypto';
@@ -16,7 +17,7 @@ export async function privateIdentity(request,env){
  if(!hash)return null;
  const row=await env.DB.prepare('SELECT users.id,users.username,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped FROM sessions JOIN users ON users.id=sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id WHERE token_hash=? AND expires_at>?').bind(hash,Date.now()).first();
  const master=typeof env.MASTER_USERNAME==='string'&&row?.username===env.MASTER_USERNAME.trim().toLowerCase();
- return row&&!row.banned&&!row.traffic_stopped&&await hasTerms(env.DB,row.id)?{id:row.id,hash,admin:master}:null;
+ return row&&!row.banned&&!row.traffic_stopped&&await hasTerms(env.DB,row.id)?{id:row.id,username:row.username,hash,admin:master}:null;
 }
 export async function issuePrivateTicket(request,env){
  const identity=await privateIdentity(request,env);if(!identity)return Response.json({error:'ログインが必要です。'},{status:401,headers:{'Cache-Control':'no-store'}});
@@ -32,7 +33,7 @@ export function createPrivateRouter(register=registerYouTubeAccount){
  const app=Object.fromEntries(['get','post'].map(method=>[method,(path,handler)=>routes.push({method:method.toUpperCase(),parts:path.split('/'),handler})]));
  const store={async get(key){const row=await env.DB.prepare('SELECT data FROM api_oauth_flows WHERE user_id=? AND expires_at>?').bind(key,Date.now()).first();return row?JSON.parse(row.data):undefined;},async set(key,value){await env.DB.prepare('INSERT INTO api_oauth_flows(user_id,data,expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,expires_at=excluded.expires_at').bind(key,JSON.stringify(value),value.expires).run();},async delete(key){await env.DB.prepare('DELETE FROM api_oauth_flows WHERE user_id=?').bind(key).run();}};
  const createClient=()=>{Log.setLevel(Log.Level.NONE);return Innertube.create({client_type:ClientType.TV,user_agent:Constants.CLIENTS.TV.USER_AGENT,location:'JP',lang:'ja',retrieve_player:false,generate_session_locally:true,retrieve_innertube_config:false,cache:{get:async()=>undefined,set:async()=>{},remove:async()=>{}}});};
- const account=register(app,{store,feedOptions:{maxRequests:2,firstPageOnly:true},secret:env.API_SHARED_SECRET,createClient,createPublicClient:()=>Innertube.create({location:'JP',lang:'ja',retrieve_player:false,generate_session_locally:true,retrieve_innertube_config:false,cache:{get:async()=>undefined,set:async()=>{},remove:async()=>{}}})});
+ const account=register(app,{store,auditRecommendation:(before,after)=>recordAdminAction(env,identity,null,'recommendationSource',before,after),feedOptions:{maxRequests:2,firstPageOnly:true},secret:env.API_SHARED_SECRET,createClient,createPublicClient:()=>Innertube.create({location:'JP',lang:'ja',retrieve_player:false,generate_session_locally:true,retrieve_innertube_config:false,cache:{get:async()=>undefined,set:async()=>{},remove:async()=>{}}})});
  if(register===registerYouTubeAccount)registerMediaDownload(app,{run:account.run,store,env,vault:credentialVault(env.API_SHARED_SECRET)});
  const parts=url.pathname.split('/');
  for(const route of routes){if(route.method!==request.method||route.parts.length!==parts.length)continue;const params={};if(!route.parts.every((p,i)=>p.startsWith(':')?(params[p.slice(1)]=decodeURIComponent(parts[i]),true):p===parts[i]))continue;

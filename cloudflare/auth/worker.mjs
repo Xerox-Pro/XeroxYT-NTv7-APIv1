@@ -1,3 +1,4 @@
+import {listAdminActions,recordAdminAction} from './admin-audit.mjs';
 import {requestJson} from '../security/http.mjs';
 import {handleDm} from './dm.mjs';
 import {clientRelease} from './releases.mjs';
@@ -161,6 +162,12 @@ export default {
         if(Math.random()<0.02)await env.DB.prepare('DELETE FROM account_request_logs WHERE at<?').bind(now-7*86400000).run();
         return json({ok:true});
       }
+      if(path==='/admin/action-history'&&request.method==='GET'){
+        if(!isMaster(user,env))return json({error:'見つかりません。'},404);
+        const before=Number(url.searchParams.get('before')??Number.MAX_SAFE_INTEGER);
+        if(!Number.isSafeInteger(before)||before<1)return json({error:'ログ位置が不正です。'},400);
+        return json(await listAdminActions(env,before));
+      }
       if(path==='/admin/system-monitor'&&(request.method==='GET'||request.method==='POST')){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         if(request.method==='GET'){
@@ -169,10 +176,11 @@ export default {
         }
         const body=await requestJson(request);
         if(typeof body.enabled!=='boolean')return json({error:'有効・無効の指定が不正です。'},400);
+        const old=await env.DB.prepare('SELECT enabled FROM system_monitor_settings WHERE id=1').first();
         const updatedAt=Date.now();
         await env.DB.prepare('INSERT INTO system_monitor_settings(id,enabled,updated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled,updated_at=excluded.updated_at')
           .bind(body.enabled?1:0,updatedAt).run();
-        return json({ok:true,enabled:body.enabled,updatedAt});
+        return json({ok:true,enabled:body.enabled,updatedAt,auditRecorded:await recordAdminAction(env,user,null,'systemMonitor',old?.enabled===1,body.enabled)});
       }
       if(path==='/admin/system-logs'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
@@ -222,16 +230,21 @@ export default {
         const targetId=adminMatch[1],target=await env.DB.prepare('SELECT users.id,users.username,CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM users LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE users.id=?').bind(targetId).first();
         if(!target)return json({error:'アカウントが見つかりません。'},404);
         const body=await requestJson(request),action=body.action;
+        const audited=async(before=null,after=null,extra={})=>json({
+          ok:true,...extra,auditRecorded:await recordAdminAction(env,user,target,action,before,after),
+        });
         if(action==='visualMode'){
           if(isOwner(target))return json({error:'オーナーアカウントのモードは変更できません。'},403);
           if(!['off','chaos','chaos2','jelly','spin','quake','zero','mirror','burning'].includes(body.mode))return json({error:'モードが無効です。'},400);
+          const before=(await accountManagement(env,targetId)).mode;
           await managementDb(env).prepare('INSERT INTO account_management(user_id,mode) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode').bind(targetId,body.mode).run();
-          return json({ok:true,mode:body.mode});
+          return audited(before,body.mode,{mode:body.mode});
         }
         if(action==='monitoring'){
           if(typeof body.enabled!=='boolean')return json({error:'監視設定が無効です。'},400);
+          const before=(await accountManagement(env,targetId)).monitoring;
           await managementDb(env).prepare('INSERT INTO account_management(user_id,monitoring) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET monitoring=excluded.monitoring').bind(targetId,Number(body.enabled)).run();
-          return json({ok:true,monitoring:body.enabled});
+          return audited(before,body.enabled,{monitoring:body.enabled});
         }
         if(action==='master'){
           // A delegated master may manage other accounts, but only Xerox0521 can create new masters.
@@ -241,7 +254,7 @@ export default {
           if(body.enabled===true)await env.DB.prepare('INSERT OR IGNORE INTO account_master_grants(user_id,granted_by,granted_at) VALUES(?,?,?)').bind(targetId,user.id,Date.now()).run();
           else if(body.enabled===false)await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=?').bind(targetId).run();
           else return json({error:'権限設定が無効です。'},400);
-          return json({ok:true,isMaster:body.enabled});
+          return audited(target.master_granted===1,body.enabled,{isMaster:body.enabled});
         }
         // Every master may lift an existing BAN/traffic stop regardless of who applied it.
         // Owner protection is absolute; other master accounts remain protected from new restrictions.
@@ -252,21 +265,23 @@ export default {
           await env.DB.prepare('DELETE FROM account_visual_modes WHERE user_id=?').bind(targetId).run();
           await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=? OR granted_by=?').bind(targetId,targetId).run();
           for(const [sql,args] of [['DELETE FROM api_oauth_flows WHERE user_id LIKE ?',[`%:${targetId}%`]],['DELETE FROM account_usage WHERE user_id=?',[targetId]],['DELETE FROM account_presence WHERE user_id=?',[targetId]],['DELETE FROM account_controls WHERE user_id=?',[targetId]],['DELETE FROM history WHERE user_id=?',[targetId]],['DELETE FROM sessions WHERE user_id=?',[targetId]],['DELETE FROM users WHERE id=?',[targetId]]])await env.DB.prepare(sql).bind(...args).run();
-          return json({ok:true});
+          return audited();
         }
         if(action==='resetPassword'){
           if(!validPass(body.password))return json({error:'新しいパスワードは12文字以上にしてください。'},400);
-          const salt=randomBytes(16).toString('hex');await env.DB.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').bind(passHash(body.password,salt),salt,targetId).run();await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();return json({ok:true});
+          const salt=randomBytes(16).toString('hex');await env.DB.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').bind(passHash(body.password,salt),salt,targetId).run();await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();return audited();
         }
         if(action==='ban'||action==='traffic'){
-          const column=action==='ban'?'banned':'traffic_stopped',enabled=body.enabled?1:0;
+          if(typeof body.enabled!=='boolean')return json({error:'有効・無効の指定が不正です。'},400);
+          const column=action==='ban'?'banned':'traffic_stopped',enabled=Number(body.enabled);
+          const old=await env.DB.prepare(`SELECT ${column} AS enabled FROM account_controls WHERE user_id=?`).bind(targetId).first();
           await env.DB.prepare(`INSERT INTO account_controls(user_id,${column},updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`).bind(targetId,enabled,Date.now()).run();
           if(action==='ban'&&!enabled){try{await env.DB.prepare('DELETE FROM login_attempts WHERE key=? OR key LIKE ?').bind('abuse-penalty:'+targetId,'youtube-rate:%:'+targetId).run();}catch(error){console.warn('Post-unban rate-limit cleanup failed:',error instanceof Error?error.message:'unknown');}}
           // Keep a banned account's session only so every device can receive the
           // explicit BAN response and persist its lock screen. All account data
           // routes remain blocked above. Traffic stops still revoke sessions.
           if(enabled&&action==='traffic'){try{await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();}catch(error){console.warn('Traffic session cleanup failed:',error instanceof Error?error.message:'unknown');}}
-          return json({ok:true});
+          return audited(old?.enabled===1,body.enabled);
         }
         return json({error:'操作が不正です。'},400);
       }

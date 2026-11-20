@@ -1,3 +1,4 @@
+import {recordModerationBan} from './admin-audit.mjs';
 import {requestJson} from '../security/http.mjs';
 import {handleGroups} from './groups.mjs';
 const reply=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'private, no-store'}});
@@ -16,7 +17,7 @@ export async function handleDm(request,env,user,admin){
  if(!profile)return reply({error:'先にDM用の表示名を設定してください。',code:'DM_PROFILE_REQUIRED'},409);
  if(path==='/reports'&&method==='GET'&&admin){const rows=await db.prepare('SELECT r.id,r.reason,r.created_at,m.body FROM dm_reports r LEFT JOIN dm_messages m ON m.id=r.message_id UNION ALL SELECT r.id,r.reason,r.created_at,m.body FROM dm_room_reports r JOIN dm_room_messages m ON m.id=r.message_id ORDER BY 3 DESC LIMIT 100').bind().all();return reply({reports:rows.results||[]});}
  const reported=/^\/reports\/([0-9a-f-]{36})\/ban$/.exec(path);
- if(reported&&method==='POST'&&admin){let row=await db.prepare('SELECT m.sender FROM dm_reports r JOIN dm_messages m ON m.id=r.message_id WHERE r.id=?').bind(reported[1]).first();if(!row)row=await db.prepare('SELECT m.sender FROM dm_room_reports r JOIN dm_room_messages m ON m.id=r.message_id WHERE r.id=?').bind(reported[1]).first();if(!row)return reply({error:'対象のメッセージがありません。'},404);const target=await db.prepare('SELECT username FROM users WHERE id=?').bind(row.sender).first();if(target?.username===String(env.MASTER_USERNAME||'').trim().toLowerCase())return reply({error:'管理者はこの操作の対象外です。'},400);await db.prepare('INSERT INTO account_controls(user_id,banned,updated_at) VALUES(?,1,?) ON CONFLICT(user_id) DO UPDATE SET banned=1,updated_at=excluded.updated_at').bind(row.sender,now).run();return reply({ok:true});}
+ if(reported&&method==='POST'&&admin){let row=await db.prepare('SELECT m.sender FROM dm_reports r JOIN dm_messages m ON m.id=r.message_id WHERE r.id=?').bind(reported[1]).first();if(!row)row=await db.prepare('SELECT m.sender FROM dm_room_reports r JOIN dm_room_messages m ON m.id=r.message_id WHERE r.id=?').bind(reported[1]).first();if(!row)return reply({error:'対象のメッセージがありません。'},404);const result=await recordModerationBan(env,user,row.sender,true);return reply(result,result.status||200);}
  const allowed=thread=>admin||thread.kind==='appeal'||(!user.banned&&!user.traffic_stopped);
  if(method==='GET'&&path===''){
   const result=await db.prepare('SELECT t.id,t.initiator,t.status,t.kind,t.updated_at,p.nickname,peer.username AS applicant_id,(SELECT sender FROM dm_messages WHERE thread_id=t.id ORDER BY created_at DESC,id DESC LIMIT 1)=? AS last_mine FROM dm_threads t LEFT JOIN dm_profiles p ON p.user_id=CASE WHEN t.a=? THEN t.b ELSE t.a END LEFT JOIN users peer ON peer.id=p.user_id WHERE t.a=? OR t.b=? ORDER BY t.updated_at DESC LIMIT 100').bind(user.id,user.id,user.id,user.id).all();
@@ -46,7 +47,7 @@ export async function handleDm(request,env,user,admin){
   return reply({messages:(rows.results||[]).map(row=>({id:row.id,mine:row.sender===user.id,text:row.body,createdAt:row.created_at}))});
  }
  if(method!=='POST')return reply({error:'未対応の操作です。'},405);
- if(match[2]==='unban'&&admin){const target=thread.a===user.id?thread.b:thread.a;await db.prepare('UPDATE account_controls SET banned=0,updated_at=? WHERE user_id=?').bind(now,target).run();try{await db.prepare('DELETE FROM login_attempts WHERE key=? OR key LIKE ?').bind('abuse-penalty:'+target,'youtube-rate:%:'+target).run();}catch(error){console.warn('DM unban rate-limit cleanup failed:',error instanceof Error?error.message:'unknown');}return reply({ok:true});}
+ if(match[2]==='unban'&&admin){const target=thread.a===user.id?thread.b:thread.a;const result=await recordModerationBan(env,user,target,false);if(!result.ok)return reply(result,result.status);try{await db.prepare('DELETE FROM login_attempts WHERE key=? OR key LIKE ?').bind('abuse-penalty:'+target,'youtube-rate:%:'+target).run();}catch(error){console.warn('DM unban rate-limit cleanup failed:',error instanceof Error?error.message:'unknown');}return reply(result);}
  if(match[2]==='accept'){
   if(thread.status!=='pending'||thread.initiator===user.id)return reply({error:'承諾できません。'},409);
   await db.prepare("UPDATE dm_threads SET status='accepted',updated_at=? WHERE id=? AND status='pending'").bind(now,thread.id).run();return reply({ok:true});

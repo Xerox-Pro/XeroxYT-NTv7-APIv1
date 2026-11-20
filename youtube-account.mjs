@@ -20,7 +20,7 @@ export function credentialVault(secret){
  return {seal(value,user){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);cipher.setAAD(Buffer.from(user));const data=Buffer.concat([cipher.update(Buffer.from(JSON.stringify(value),'utf8')),cipher.final()]);return {iv:iv.toString('base64'),data:data.toString('base64'),tag:cipher.getAuthTag().toString('base64')};},open(value,user){const cipher=createDecipheriv('aes-256-gcm',key,Buffer.from(value.iv,'base64'));cipher.setAAD(Buffer.from(user));cipher.setAuthTag(Buffer.from(value.tag,'base64'));return JSON.parse(Buffer.concat([cipher.update(Buffer.from(value.data,'base64')),cipher.final()]).toString());}};
 }
 const text=value=>typeof value==='string'?value:value?.text||value?.toString?.()||'';
-export function registerYouTubeAccount(app,{store,secret,createClient,createPublicClient,formatVideo,formatChannel,Search,ContinuationItem,Feed,fetcher=fetch,feedOptions={}}){
+export function registerYouTubeAccount(app,{store,secret,createClient,createPublicClient,formatVideo,formatChannel,Search,ContinuationItem,Feed,fetcher=fetch,feedOptions={},auditRecommendation}){
  const recommendationSourceId='recommendation-source';
  const readFeed=(yt,kind,cursor='')=>readYouTubeFeed(yt,kind,cursor,feedOptions);
  let vault;const getVault=()=>vault||(vault=credentialVault(secret));
@@ -67,10 +67,10 @@ export function registerYouTubeAccount(app,{store,secret,createClient,createPubl
  });
  route('post','/api/user/admin/recommendation-source',async(req,res,id)=>{
   if(!res.locals.siteAccountAdmin)throw Object.assign(new Error('Not found'),{status:404});
-  if(req.body?.action==='remove'){await store.delete('youtube:'+recommendationSourceId);return {configured:false};}
+  if(req.body?.action==='remove'){const before=!!await read(recommendationSourceId);await store.delete('youtube:'+recommendationSourceId);return {configured:false,auditRecorded:await auditRecommendation?.(before,false)};}
   if(req.body?.action!=='useCurrent')throw Object.assign(new Error('未対応の操作です。'),{status:400});
   const current=await read(id);if(!current)throw Object.assign(new Error('先に推薦用Googleアカウントをこの管理アカウントへ連携してください。'),{status:400});
-  await save(recommendationSourceId,current);return {configured:true,user:current.user||null};
+  const before=!!await read(recommendationSourceId);await save(recommendationSourceId,current);return {configured:true,user:current.user||null,auditRecorded:await auditRecommendation?.(before,true)};
  });
  route('post','/api/auth/signin',async(req,res,id)=>{
   getVault();const existing=await store.get('youtube-flow:'+id);if(existing&&existing.expires>Date.now()){const previous=getVault().open(existing.flow,id);if(previous.userCode&&previous.verificationUrl)return {userCode:previous.userCode,verificationUrl:previous.verificationUrl,expiresAt:existing.expires,interval:previous.interval};}
