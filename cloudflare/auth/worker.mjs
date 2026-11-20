@@ -39,7 +39,7 @@ async function limit(db, key, max) {
   return row.count <= max;
 }
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, gatewayUser) {
     try {
       const url = new URL(request.url);
       const path = url.pathname.replace(/^\/api\/account/, '');
@@ -50,7 +50,7 @@ export default {
         if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return json({ error: '不正な形式です。' }, 415);
       }
       if (Number(request.headers.get('content-length') || 0) > 131072) return json({ error: 'データが大きすぎます。' }, 413);
-      const sessionUser=await currentUser(request,env.DB);
+      const sessionUser=gatewayUser===undefined?await currentUser(request,env.DB):gatewayUser;
       if(sessionUser?.banned)return bannedResponse();
       if(path==='/register')return json({error:'新規アカウントの受付は停止しています。',code:'REGISTRATION_DISABLED'},403);
       if(path==='/client-release')return clientRelease(request,env,sessionUser);

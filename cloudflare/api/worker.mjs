@@ -5,6 +5,24 @@ import accountWorker,{bannedResponse,currentUser} from '../auth/worker.mjs';
 import {handleYouTubeStore} from '../../youtube-store-bridge.mjs';
 import {withGasAccess} from './gas-access.mjs';
 import {createD1Database} from '../../d1-rest.mjs';
+const lastSeenWrites = new Map();
+function trackLastCommunication(user, request, env, ctx) {
+ if (!user?.id || !env.DB || !ctx?.waitUntil || request.method === 'OPTIONS') return;
+ const path = new URL(request.url).pathname;
+ if (!/^\/(?:api\/|stream\/|360\/|edu\/|scratch-edu\/)/.test(path) ||
+  /^\/api\/account\/(?:presence|visual-mode|dm|admin)(?:\/|$)/.test(path)) return;
+ const now = Date.now();
+ if (now - (lastSeenWrites.get(user.id) ?? 0) < 30000) return;
+ if (lastSeenWrites.size >= 2048) lastSeenWrites.delete(lastSeenWrites.keys().next().value);
+ lastSeenWrites.set(user.id, now);
+ const day = new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+ ctx.waitUntil(Promise.resolve().then(() => env.DB.prepare(
+  'INSERT INTO account_usage(user_id,day,requests,videos,searches,last_seen) VALUES(?,?,0,0,0,?) ' +
+  'ON CONFLICT(user_id,day) DO UPDATE SET last_seen=MAX(account_usage.last_seen,excluded.last_seen)'
+ ).bind(user.id, day, now).run()).catch(() => {
+  if (lastSeenWrites.get(user.id) === now) lastSeenWrites.delete(user.id);
+ }));
+}
 async function handleRequest(request,env,ctx){
  const pathName=new URL(request.url).pathname;
  if(/^\/api\/(instagram|tiktok|x|x-public-post|social-browser)(?:\/|$)/i.test(pathName))return Response.json({error:'Not found'},{status:404});
@@ -16,11 +34,13 @@ async function handleRequest(request,env,ctx){
  if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
  let response;
  try{
-  if(!path.startsWith('/api/account/')&&(await currentUser(request,env.DB))?.banned)return bannedResponse();
+  const user=await currentUser(request,env.DB);
+  trackLastCommunication(user,request,env,ctx);
+  if(user?.banned)return bannedResponse();
   if(path==='/internal/youtube-store'){const denied=authorizeSource(request,{...env,REQUIRE_PROXY_SECRET:'true'});if(denied)return denied;return await handleYouTubeStore(request,env.DB);}
   if(path==='/api/account/cloudflare-session'&&request.method==='GET')response=await issuePrivateTicket(request,env);
   else if(privatePath(path))response=await handlePrivateApi(request,env);
-  else if(path.startsWith('/api/account/'))response=await accountWorker.fetch(request,env);
+  else if(path.startsWith('/api/account/'))response=await accountWorker.fetch(request,env,user);
   else if(path==='/health')response=Response.json({ok:true,runtime:'cloudflare-workers',implementation:'full-express-api'});
   else if(/^\/api\/download(?:-|\/|$)/.test(path))response=Response.json({error:'ダウンロード機能は削除されました。',code:'DOWNLOAD_REMOVED'},{status:410});
   else{
