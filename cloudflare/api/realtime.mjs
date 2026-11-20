@@ -101,9 +101,7 @@ async function publish(env, channel, event, userId, sessionHash) {
   if (!env.REALTIME) return;
   const target=env.REALTIME.getByName(channel);
   await target.publish(event,userId,sessionHash);
-  if(env.REALTIME_RELAY_URL)await target.enqueueRelay({channel,event,userId,sessionHash}); else if (env.REALTIME) {
-   await env.REALTIME.getByName(channel).publish(event, userId, sessionHash);
-  }
+  if(env.REALTIME_RELAY_URL)await target.enqueueRelay({channel,event,userId,sessionHash});
  } catch (error) {
   console.warn('realtime_delivery_failed', event, error?.name);
  }
@@ -119,7 +117,7 @@ export const revokeRealtime = (env, id, sessionHash) => Promise.all([
 ]);
 
 export async function notifyRoom(env, roomId) {
- if (!env.REALTIME && !env.REALTIME_RELAY_URL) return;
+ if (!env.REALTIME) return;
  try {
   const members = await env.DB.prepare("SELECT user_id FROM dm_members WHERE room_id=? AND status='joined'").bind(roomId).all();
   await notifyUsers(env, (members.results || []).map(row=>row.user_id), 'rooms');
@@ -129,7 +127,7 @@ export async function notifyRoom(env, roomId) {
 }
 
 export async function notifyPublicRooms(env) {
- if (!env.REALTIME && !env.REALTIME_RELAY_URL) return;
+ if (!env.REALTIME) return;
  try {
   const profiles = await env.DB.prepare('SELECT user_id FROM dm_profiles').all();
   await notifyUsers(env, (profiles.results || []).map(row=>row.user_id), 'rooms');
