@@ -1,7 +1,8 @@
+import {issueRealtimeTicket,upgradeRealtime,notifyAdmin,readSystemMonitor,socketPath,ticketPath,receiveRealtimeRelay,relayPath} from './realtime.mjs';
 import {secureApiResponse} from '../security/http.mjs';
 import {privatePath,handlePrivateApi,issuePrivateTicket} from './private-api.mjs';
 import {authorizeSource} from '../../access-policy.mjs';
-import accountWorker,{bannedResponse,currentUser} from '../auth/worker.mjs';
+import accountWorker,{bannedResponse,currentUser,currentUserByHash,isMaster,sessionHash} from '../auth/worker.mjs';
 import {handleYouTubeStore} from '../../youtube-store-bridge.mjs';
 import {withGasAccess} from './gas-access.mjs';
 import {createD1Database} from '../../d1-rest.mjs';
@@ -19,7 +20,7 @@ function trackLastCommunication(user, request, env, ctx) {
  ctx.waitUntil(Promise.resolve().then(() => env.DB.prepare(
   'INSERT INTO account_usage(user_id,day,requests,videos,searches,last_seen) VALUES(?,?,0,0,0,?) ' +
   'ON CONFLICT(user_id,day) DO UPDATE SET last_seen=MAX(account_usage.last_seen,excluded.last_seen)'
- ).bind(user.id, day, now).run()).catch(() => {
+ ).bind(user.id, day, now).run()).then(()=>notifyAdmin(env,'accounts')).catch(() => {
   if (lastSeenWrites.get(user.id) === now) lastSeenWrites.delete(user.id);
  }));
 }
@@ -35,6 +36,10 @@ async function handleRequest(request,env,ctx){
  let response;
  try{
   const user=await currentUser(request,env.DB,env);
+  if(path===ticketPath&&request.method==='GET'){
+   if(!user)return new Response(null,{status:401});
+   return issueRealtimeTicket(request,env,user,sessionHash(request),isMaster(user,env));
+  }
   trackLastCommunication(user,request,env,ctx);
   if(user?.banned)return bannedResponse();
   if(path==='/internal/youtube-store'){const denied=authorizeSource(request,{...env,REQUIRE_PROXY_SECRET:'true'});if(denied)return denied;return await handleYouTubeStore(request,env.DB);}
@@ -52,13 +57,13 @@ async function handleRequest(request,env,ctx){
 // Monitoring is OFF by default. Cache the setting briefly to avoid a D1 read
 // for every video/API request; the switch propagates within a few seconds.
 let monitorState={enabled:false,expires:0,pending:null};
-async function systemMonitorEnabled(db){
+async function systemMonitorEnabled(env){
  const now=Date.now();
  if(now<monitorState.expires)return monitorState.enabled;
  if(monitorState.pending)return monitorState.pending;
- monitorState.pending=db.prepare('SELECT enabled FROM system_monitor_settings WHERE id=1').first()
-  .then(row=>{
-   monitorState.enabled=row?.enabled===1;
+ monitorState.pending=readSystemMonitor(env)
+  .then(enabled=>{
+   monitorState.enabled=enabled;
    monitorState.expires=Date.now()+3000;
    return monitorState.enabled;
   })
@@ -93,6 +98,7 @@ async function recordSystemRequest(request,env,route,status,durationMs){
  const now=Date.now();
  await env.DB.prepare('INSERT INTO system_request_logs(user_id,at,route,method,status,duration_ms) VALUES(?,?,?,?,?,?)')
   .bind(userId,now,route,request.method,status,Math.max(0,Math.min(60000,durationMs))).run();
+ await notifyAdmin(env,'logs');
  if(Math.random()<0.005){
   try{await env.DB.prepare('DELETE FROM system_request_logs WHERE at<?').bind(now-7*86400000).run();}
   catch(error){console.warn('system_log_cleanup_failed',error instanceof Error?error.message:'unknown');}
@@ -107,11 +113,11 @@ const worker={async fetch(request,env,ctx){
   return response;
  }finally{
   // Cloudflare waitUntil writes the log without delaying API responses or video streaming.
-  if(env.DB&&ctx?.waitUntil&&request.method!=='OPTIONS'
+  if(env.DB&&ctx?.waitUntil&&request.method!=='OPTIONS'&&path!==ticketPath
     &&/^\/(?:api(?:\/|$)|stream\/|360\/|edu\/|scratch-edu\/)/.test(path)
     &&!/^\/api\/account\/(?:telemetry|admin\/(?:logs|system-logs|system-monitor))(?:\/|$)/.test(path)){
    const route=safeOperation(path);
-   const task=systemMonitorEnabled(env.DB)
+   const task=systemMonitorEnabled(env)
      .then(enabled=>enabled?recordSystemRequest(request,env,route,response?.status||500,Date.now()-started):undefined)
      .catch(error=>console.warn('system_request_log_failed',error instanceof Error?error.message:'unknown'));
    ctx.waitUntil(task);
@@ -127,6 +133,17 @@ export default {
    D1_DATABASE_ID:env.MANAGEMENT_D1_DATABASE_ID,
    CLOUDFLARE_API_TOKEN:env.MANAGEMENT_D1_TOKEN,
   });
-  return gateway.fetch(request, {...env,DB:database,MANAGEMENT_DB:management},ctx);
+  const bindings={...env,DB:database,MANAGEMENT_DB:management};
+  const path=new URL(request.url).pathname;
+  if(path===relayPath)return receiveRealtimeRelay(request,bindings);
+  if(path===socketPath){
+   const denied=authorizeSource(request,{...env,REQUIRE_PROXY_SECRET:'false'});
+   if(denied)return denied;
+   return upgradeRealtime(request,bindings,currentUserByHash,isMaster).catch(error=>{
+    console.warn('realtime_upgrade_failed',error?.name);
+    return new Response(null,{status:503});
+   });
+  }
+  return gateway.fetch(request,bindings,ctx);
  },
 };

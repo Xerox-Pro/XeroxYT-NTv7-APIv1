@@ -1,3 +1,4 @@
+import {notifyUsers} from '../api/realtime.mjs';
 import {recordModerationBan} from './admin-audit.mjs';
 import {requestJson} from '../security/http.mjs';
 import {handleGroups} from './groups.mjs';
@@ -30,13 +31,13 @@ export async function handleDm(request,env,user,admin){
   const target=typeof body.target==='string'?body.target.trim().toLowerCase():'';
   // Same response for nonexistent, blocked, duplicate and valid targets.
   const other=await db.prepare('SELECT id FROM users WHERE username=?').bind(target).first();
-  if(other&&other.id!==user.id){const [a,b]=[user.id,other.id].sort();await db.prepare('INSERT OR IGNORE INTO dm_threads(id,a,b,initiator,status,kind,updated_at) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),a,b,user.id,admin?'accepted':'pending','normal',now).run();if(admin){const thread=await db.prepare("SELECT id FROM dm_threads WHERE a=? AND b=? AND kind='normal'").bind(a,b).first();return reply({ok:true,threadId:thread.id});}}
+  if(other&&other.id!==user.id){const [a,b]=[user.id,other.id].sort();await db.prepare('INSERT OR IGNORE INTO dm_threads(id,a,b,initiator,status,kind,updated_at) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),a,b,user.id,admin?'accepted':'pending','normal',now).run();await notifyUsers(env,[user.id,other.id],'dm');if(admin){const thread=await db.prepare("SELECT id FROM dm_threads WHERE a=? AND b=? AND kind='normal'").bind(a,b).first();return reply({ok:true,threadId:thread.id});}}
   return reply({ok:true,message:'申請を受け付けました。相手が承諾すると会話できます。'});
  }
  if(method==='POST'&&path==='/appeal'){
   const master=await db.prepare('SELECT id FROM users WHERE username=?').bind(String(env.MASTER_USERNAME||'').trim().toLowerCase()).first();
   if(!master||master.id===user.id)return reply({error:'解除申請を開始できません。'},400);
-  const [a,b]=[user.id,master.id].sort();await db.prepare('INSERT OR IGNORE INTO dm_threads(id,a,b,initiator,status,kind,updated_at) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),a,b,user.id,'accepted','appeal',now).run();return reply({ok:true});
+  const [a,b]=[user.id,master.id].sort();await db.prepare('INSERT OR IGNORE INTO dm_threads(id,a,b,initiator,status,kind,updated_at) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),a,b,user.id,'accepted','appeal',now).run();await notifyUsers(env,[user.id,master.id],'dm');return reply({ok:true});
  }
  const match=/^\/([0-9a-f-]{36})(?:\/(accept|block|report|unban))?$/.exec(path);if(!match)return reply({error:'見つかりません。'},404);
  const thread=await db.prepare('SELECT * FROM dm_threads WHERE id=? AND (a=? OR b=?)').bind(match[1],user.id,user.id).first();
@@ -50,11 +51,11 @@ export async function handleDm(request,env,user,admin){
  if(match[2]==='unban'&&admin){const target=thread.a===user.id?thread.b:thread.a;const result=await recordModerationBan(env,user,target,false);if(!result.ok)return reply(result,result.status);try{await db.prepare('DELETE FROM login_attempts WHERE key=? OR key LIKE ?').bind('abuse-penalty:'+target,'youtube-rate:%:'+target).run();}catch(error){console.warn('DM unban rate-limit cleanup failed:',error instanceof Error?error.message:'unknown');}return reply(result);}
  if(match[2]==='accept'){
   if(thread.status!=='pending'||thread.initiator===user.id)return reply({error:'承諾できません。'},409);
-  await db.prepare("UPDATE dm_threads SET status='accepted',updated_at=? WHERE id=? AND status='pending'").bind(now,thread.id).run();return reply({ok:true});
+  await db.prepare("UPDATE dm_threads SET status='accepted',updated_at=? WHERE id=? AND status='pending'").bind(now,thread.id).run();await notifyUsers(env,[thread.a,thread.b],'dm');return reply({ok:true});
  }
  if(match[2]==='block'){
   if(thread.kind==='appeal')return reply({error:'解除申請の会話はブロックできません。'},400);
-  await db.prepare("UPDATE dm_threads SET status='blocked',updated_at=? WHERE id=?").bind(now,thread.id).run();return reply({ok:true});
+  await db.prepare("UPDATE dm_threads SET status='blocked',updated_at=? WHERE id=?").bind(now,thread.id).run();await notifyUsers(env,[thread.a,thread.b],'dm');return reply({ok:true});
  }
  const body=await requestJson(request);
  if(match[2]==='report'){
@@ -67,5 +68,5 @@ export async function handleDm(request,env,user,admin){
  if(await limited('send',15,60000))return reply({error:'送信が速すぎます。少し待ってください。'},429);
  const text=typeof body.text==='string'?body.text.trim():'';if(!text||text.length>2000)return reply({error:'本文は1〜2000文字で入力してください。'},400);
  const warning=moderateMessage(text);if(warning)return reply({error:warning,code:'DM_CONTENT_WARNING'},422);
- await db.prepare("INSERT INTO dm_messages(id,thread_id,sender,body,created_at) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM dm_threads WHERE id=? AND status='accepted')").bind(crypto.randomUUID(),thread.id,user.id,text,now,thread.id).run();await db.prepare('UPDATE dm_threads SET updated_at=? WHERE id=?').bind(now,thread.id).run();return reply({ok:true});
+ await db.prepare("INSERT INTO dm_messages(id,thread_id,sender,body,created_at) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM dm_threads WHERE id=? AND status='accepted')").bind(crypto.randomUUID(),thread.id,user.id,text,now,thread.id).run();await db.prepare('UPDATE dm_threads SET updated_at=? WHERE id=?').bind(now,thread.id).run();await notifyUsers(env,[thread.a,thread.b],'dm');return reply({ok:true});
 }
