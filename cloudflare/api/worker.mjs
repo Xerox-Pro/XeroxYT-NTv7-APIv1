@@ -1,7 +1,7 @@
 import {secureApiResponse} from '../security/http.mjs';
 import {privatePath,handlePrivateApi,issuePrivateTicket} from './private-api.mjs';
 import {authorizeSource} from '../../access-policy.mjs';
-import accountWorker from '../auth/worker.mjs';
+import accountWorker,{bannedResponse,currentUser} from '../auth/worker.mjs';
 import {handleYouTubeStore} from '../../youtube-store-bridge.mjs';
 import {withGasAccess} from './gas-access.mjs';
 import {createD1Database} from '../../d1-rest.mjs';
@@ -16,6 +16,7 @@ async function handleRequest(request,env,ctx){
  if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
  let response;
  try{
+  if(!path.startsWith('/api/account/')&&(await currentUser(request,env.DB))?.banned)return bannedResponse();
   if(path==='/internal/youtube-store'){const denied=authorizeSource(request,{...env,REQUIRE_PROXY_SECRET:'true'});if(denied)return denied;return await handleYouTubeStore(request,env.DB);}
   if(path==='/api/account/cloudflare-session'&&request.method==='GET')response=await issuePrivateTicket(request,env);
   else if(privatePath(path))response=await handlePrivateApi(request,env);
