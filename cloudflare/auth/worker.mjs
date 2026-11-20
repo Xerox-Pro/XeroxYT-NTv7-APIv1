@@ -201,6 +201,14 @@ export default {
         if(!/^\d{1,15}$/.test(rawAfter))return json({error:'ログ位置が不正です。'},400);
         const after=Math.max(0,Math.floor(Number(rawAfter)));
         const errorsOnly=url.searchParams.get('errors')==='1';
+        if(env.REALTIME){
+          const logs=await env.REALTIME.getByName('admin').listLogs(userId,errorsOnly);
+          if(logs.length>=150)return json({logs,nextAfter:after});
+          const history=await env.DB.prepare(
+            'SELECT logs.id,logs.at,logs.route,logs.method,logs.status,logs.duration_ms,logs.user_id,users.username FROM system_request_logs logs LEFT JOIN users ON logs.user_id=users.id WHERE logs.at>=? AND (?=\'\' OR logs.user_id=?) AND (?=0 OR logs.status>=400) ORDER BY logs.at DESC,logs.id DESC LIMIT ?'
+          ).bind(Date.now()-7*86400000,userId,userId,Number(errorsOnly),150-logs.length).all().catch(()=>null);
+          return json({logs:[...(history?.results||[]),...logs].sort((a,b)=>a.at-b.at),nextAfter:after});
+        }
         const conditions=['logs.at>=?'],values=[Date.now()-7*86400000];
         if(after){conditions.push('logs.id>?');values.push(after);}
         if(userId){conditions.push('logs.user_id=?');values.push(userId);}
@@ -328,6 +336,7 @@ export default {
       return json({ error: '見つかりません。' }, 404);
     } catch (err) {
       console.warn(JSON.stringify({event:'account_request_failed',status:err.status||500,code:err.code||'ACCOUNT_FAILED'}));
+      if(err.code==='D1_WRITE_LIMIT')return json({error:'アカウントの保存先が本日の書き込み上限に達しました。日本時間の午前9時以降に再試行してください。',code:err.code},503);
       if(err.status===400||err.status===413)return json({error:err.message},err.status);
       return json({ error: '処理に失敗しました。時間をおいてお試しください。' }, 500);
     }

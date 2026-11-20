@@ -58,12 +58,16 @@ export async function receiveRealtimeRelay(request, env) {
  const supplied = Buffer.from(request.headers.get('X-Realtime-Signature') || '', 'hex');
  if (supplied.length !== 32) return new Response(null,{status:403});
  let body;
- try { body = new TextDecoder().decode(await boundedBytes(request,1024)); }
+ try { body = new TextDecoder().decode(await boundedBytes(request,32768)); }
  catch { return new Response(null,{status:413}); }
  if (!timingSafeEqual(supplied,relayMac(env.REALTIME_RELAY_SECRET,body))) return new Response(null,{status:403});
- const {channel,event,userId,sessionHash,at} = JSON.parse(body);
+ const {channel,event,userId,sessionHash,at,logs} = JSON.parse(body);
  if (!Number.isSafeInteger(at) || Math.abs(Date.now()-at)>30000) return new Response(null,{status:403});
  if (channel!=='admin' && !/^account:[A-Za-z0-9_-]{1,64}$/.test(channel)) return new Response(null,{status:400});
+ if(channel==='admin'&&event==='log-batch'&&Array.isArray(logs)&&logs.length<=50){
+  await env.REALTIME.getByName(channel).storeLogs(logs,false);
+  return new Response(null,{status:204});
+ }
  if (!['mode','banned','unbanned','session','dm','rooms','accounts','logs','monitor'].includes(event)) return new Response(null,{status:400});
  const target=env.REALTIME.getByName(channel);
  if(event==='monitor')await target.invalidateMonitor();
