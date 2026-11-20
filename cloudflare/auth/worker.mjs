@@ -34,6 +34,12 @@ async function linkDevice(db, device, userId) {
   await db.prepare('INSERT INTO account_devices(device_hash,user_id) VALUES(?,?) ON CONFLICT(device_hash) DO NOTHING').bind(device,userId).run();
 }
 const duplicateDevice = () => json({error:'このブラウザではすでにアカウントを使用しています。既存のアカウントでログインしてください。',code:'DEVICE_ALREADY_REGISTERED'},409);
+const managementDb = env => env.MANAGEMENT_DB ?? env.DB;
+async function accountManagement(env,userId) {
+  const row=await managementDb(env).prepare('SELECT mode,monitoring FROM account_management WHERE user_id=?').bind(userId).first();
+  const legacy=row?.mode==null?await env.DB.prepare('SELECT mode FROM account_visual_modes WHERE user_id=?').bind(userId).first():null;
+  return {mode:row?.mode??legacy?.mode??'off',monitoring:row?.monitoring===1};
+}
 async function startSession(db, user, env) {
   const token = randomBytes(32).toString('hex');
   await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').bind(hash(token), user.id, Date.now() + MAX_AGE * 1000).run();
@@ -141,8 +147,7 @@ export default {
         const devices=await env.DB.prepare('SELECT u.username,d.device_id,d.version,d.applied_at,d.last_seen,d.last_error FROM device_releases d JOIN users u ON u.id=d.user_id ORDER BY d.last_seen DESC LIMIT 200').bind().all();return json({latest,devices:devices.results||[]});
       }
       if(path==='/visual-mode'&&request.method==='GET'){
-        const row=await env.DB.prepare('SELECT mode FROM account_visual_modes WHERE user_id=?').bind(user.id).first();
-        return json({mode:row?.mode||'off'});
+        return json(await accountManagement(env,user.id));
       }
       if(path==='/telemetry'&&request.method==='POST'){
         const auth=request.headers.get('authorization')||'';
@@ -199,13 +204,17 @@ export default {
       if(path==='/admin/accounts'&&request.method==='GET'){
         if(!isMaster(user,env))return json({error:'見つかりません。'},404);
         const result=await env.DB.prepare("SELECT users.id,users.username,users.created_at,CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted,COALESCE(account_controls.banned,0) AS banned,COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped,COALESCE(SUM(account_usage.requests),0) AS requests,COALESCE(SUM(account_usage.videos),0) AS videos,COALESCE(SUM(account_usage.searches),0) AS searches,MAX(account_usage.last_seen) AS last_seen FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id LEFT JOIN account_usage ON account_usage.user_id=users.id GROUP BY users.id ORDER BY users.created_at DESC").bind().all();
-        const modes=await env.DB.prepare('SELECT user_id,mode FROM account_visual_modes').bind().all();
-        const byId=new Map((modes.results||[]).map(row=>[row.user_id,row.mode]));
+        const [legacyModes, settings] = await Promise.all([
+          env.DB.prepare('SELECT user_id,mode FROM account_visual_modes').bind().all(),
+          managementDb(env).prepare('SELECT user_id,mode,monitoring FROM account_management').bind().all(),
+        ]);
+        const legacyById=new Map((legacyModes.results||[]).map(row=>[row.user_id,row.mode]));
+        const byId=new Map((settings.results||[]).map(row=>[row.user_id,row]));
         // Only foreground tabs checked in within 90 seconds count as viewing.
         const active=await env.DB.prepare('SELECT user_id,page,title,last_seen FROM account_presence WHERE last_seen>=? ORDER BY last_seen DESC').bind(Date.now()-90000).all();
         const viewingByUser=new Map();
         for(const row of active.results||[])if(!viewingByUser.has(row.user_id))viewingByUser.set(row.user_id,row);
-        return json({accounts:(result.results||[]).map(row=>({...row,is_master:isMaster(row,env),visual_mode:byId.get(row.id)||'off',viewing:viewingByUser.has(row.id),viewing_page:viewingByUser.get(row.id)?.page||'',viewing_title:viewingByUser.get(row.id)?.title||''}))});
+        return json({accounts:(result.results||[]).map(row=>({...row,is_master:isMaster(row,env),visual_mode:byId.get(row.id)?.mode??legacyById.get(row.id)??'off',monitoring:byId.get(row.id)?.monitoring===1,viewing:viewingByUser.has(row.id),viewing_page:viewingByUser.get(row.id)?.page||'',viewing_title:viewingByUser.get(row.id)?.title||''}))});
       }
       const adminMatch=/^\/admin\/accounts\/([0-9a-f-]{36})$/.exec(path);
       if(adminMatch&&request.method==='POST'){
@@ -215,9 +224,14 @@ export default {
         const body=await requestJson(request),action=body.action;
         if(action==='visualMode'){
           if(isOwner(target))return json({error:'オーナーアカウントのモードは変更できません。'},403);
-          if(!['off','chaos','chaos2','jelly','spin','quake','zero','mirror'].includes(body.mode))return json({error:'モードが無効です。'},400);
-          await env.DB.prepare('INSERT INTO account_visual_modes(user_id,mode,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,updated_at=excluded.updated_at').bind(targetId,body.mode,Date.now()).run();
+          if(!['off','chaos','chaos2','jelly','spin','quake','zero','mirror','burning'].includes(body.mode))return json({error:'モードが無効です。'},400);
+          await managementDb(env).prepare('INSERT INTO account_management(user_id,mode) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode').bind(targetId,body.mode).run();
           return json({ok:true,mode:body.mode});
+        }
+        if(action==='monitoring'){
+          if(typeof body.enabled!=='boolean')return json({error:'監視設定が無効です。'},400);
+          await managementDb(env).prepare('INSERT INTO account_management(user_id,monitoring) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET monitoring=excluded.monitoring').bind(targetId,Number(body.enabled)).run();
+          return json({ok:true,monitoring:body.enabled});
         }
         if(action==='master'){
           // A delegated master may manage other accounts, but only Xerox0521 can create new masters.
@@ -234,6 +248,7 @@ export default {
         const restoreOnly=(action==='ban'||action==='traffic')&&body.enabled===false;
         if(isOwner(target)||(isMaster(target,env)&&!restoreOnly))return json({error:'保護対象のアカウントは変更できません。'},403);
         if(action==='delete'){
+          await managementDb(env).prepare('DELETE FROM account_management WHERE user_id=?').bind(targetId).run();
           await env.DB.prepare('DELETE FROM account_visual_modes WHERE user_id=?').bind(targetId).run();
           await env.DB.prepare('DELETE FROM account_master_grants WHERE user_id=? OR granted_by=?').bind(targetId,targetId).run();
           for(const [sql,args] of [['DELETE FROM api_oauth_flows WHERE user_id LIKE ?',[`%:${targetId}%`]],['DELETE FROM account_usage WHERE user_id=?',[targetId]],['DELETE FROM account_presence WHERE user_id=?',[targetId]],['DELETE FROM account_controls WHERE user_id=?',[targetId]],['DELETE FROM history WHERE user_id=?',[targetId]],['DELETE FROM sessions WHERE user_id=?',[targetId]],['DELETE FROM users WHERE id=?',[targetId]]])await env.DB.prepare(sql).bind(...args).run();
@@ -262,7 +277,7 @@ export default {
       }
       if (request.method === 'GET' && path === '/history') {
         const row = await env.DB.prepare('SELECT data, version FROM history WHERE user_id = ?').bind(user.id).first();
-        return json({ history: row ? JSON.parse(row.data) : [], version: row?.version || 0 });
+        return json({ history: row ? JSON.parse(row.data) : [], version: row?.version || 0, ...(await accountManagement(env,user.id).catch(()=>({}))) });
       }
       if (request.method === 'PUT' && path === '/history') {
         const body = await requestJson(request);

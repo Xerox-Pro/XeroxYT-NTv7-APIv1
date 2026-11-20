@@ -121,8 +121,12 @@ const worker={async fetch(request,env,ctx){
 const gateway = withGasAccess(worker);
 export default {
  fetch(request, env, ctx) {
-  if (env.DB) return gateway.fetch(request, env, ctx);
-  const database = createD1Database(env);
-  return gateway.fetch(request, database ? {...env, DB: database} : env, ctx);
+  const database = env.DB ?? createD1Database(env);
+  const management = env.MANAGEMENT_DB ?? createD1Database({
+   CLOUDFLARE_ACCOUNT_ID:env.MANAGEMENT_D1_ACCOUNT_ID,
+   D1_DATABASE_ID:env.MANAGEMENT_D1_DATABASE_ID,
+   CLOUDFLARE_API_TOKEN:env.MANAGEMENT_D1_TOKEN,
+  });
+  return gateway.fetch(request, {...env,DB:database,MANAGEMENT_DB:management},ctx);
  },
 };
