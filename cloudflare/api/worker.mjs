@@ -5,7 +5,7 @@ import {authorizeSource} from '../../access-policy.mjs';
 import accountWorker,{bannedResponse,currentUser,currentUserByHash,isMaster,sessionHash} from '../auth/worker.mjs';
 import {handleYouTubeStore} from '../../youtube-store-bridge.mjs';
 import {withGasAccess} from './gas-access.mjs';
-import {createD1Database} from '../../d1-rest.mjs';
+import {withD1Bindings} from '../../d1-rest.mjs';
 const lastSeenWrites = new Map();
 function trackLastCommunication(user, request, env, ctx) {
  if (!user?.id || !env.DB || !ctx?.waitUntil || request.method === 'OPTIONS') return;
@@ -119,13 +119,7 @@ const worker={async fetch(request,env,ctx){
 const gateway = withGasAccess(worker);
 export default {
  fetch(request, env, ctx) {
-  const database = env.DB ?? createD1Database(env);
-  const management = env.MANAGEMENT_DB ?? createD1Database({
-   CLOUDFLARE_ACCOUNT_ID:env.MANAGEMENT_D1_ACCOUNT_ID,
-   D1_DATABASE_ID:env.MANAGEMENT_D1_DATABASE_ID,
-   CLOUDFLARE_API_TOKEN:env.MANAGEMENT_D1_TOKEN,
-  });
-  const bindings={...env,DB:database,MANAGEMENT_DB:management};
+  const bindings = withD1Bindings(env);
   const path=new URL(request.url).pathname;
   if(path===relayPath)return receiveRealtimeRelay(request,bindings);
   if(path===socketPath){

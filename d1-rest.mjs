@@ -16,3 +16,16 @@ export function createD1Database(env) {
  }
  return { prepare: statement };
 }
+
+// The Express bridge runs in its own request context and starts with the raw Worker bindings.
+export function withD1Bindings(env) {
+ return {
+  ...env,
+  DB: env.DB ?? createD1Database(env),
+  MANAGEMENT_DB: env.MANAGEMENT_DB ?? createD1Database({
+   CLOUDFLARE_ACCOUNT_ID:env.MANAGEMENT_D1_ACCOUNT_ID,
+   D1_DATABASE_ID:env.MANAGEMENT_D1_DATABASE_ID,
+   CLOUDFLARE_API_TOKEN:env.MANAGEMENT_D1_TOKEN,
+  }),
+ };
+}
