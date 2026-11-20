@@ -1,3 +1,4 @@
+import {notifyUsers,notifyAdmin,revokeRealtime,updateSystemMonitor} from '../api/realtime.mjs';
 import {managementDb,mergeControls,readControls,setControl} from './managed-controls.mjs';
 import {listAdminActions,recordAdminAction} from './admin-audit.mjs';
 import {requestJson} from '../security/http.mjs';
@@ -15,14 +16,20 @@ export const bannedResponse = (headers) => json({error:'このアカウントは
 const validUser = name => typeof name === 'string' && /^[a-z0-9_]{3,32}$/.test(name);
 const validPass = password => typeof password === 'string' && password.length >= 12 && Buffer.byteLength(password) <= 256;
 
-export async function currentUser(request, db, env={DB:db}) {
+export function sessionHash(request) {
   const token = /(?:^|;\s*)__Host-xy_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get('Cookie') || '')?.[1];
-  if (!token) return null;
-  const user=await db.prepare('SELECT users.id, users.username, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(hash(token), Date.now()).first();
+  return token ? hash(token) : null;
+}
+export async function currentUser(request, db, env={DB:db}) {
+  return currentUserByHash(db,env,sessionHash(request));
+}
+export async function currentUserByHash(db,env,tokenHash) {
+  if (!tokenHash) return null;
+  const user=await db.prepare('SELECT users.id, users.username, sessions.expires_at, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(tokenHash, Date.now()).first();
   return readControls(env,user);
 }
 const isOwner = user => user?.username?.toLowerCase() === 'xerox0521';
-const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&(isOwner(user)||user.username===env.MASTER_USERNAME.trim().toLowerCase()||user.master_granted===1);
+export const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&(isOwner(user)||user.username===env.MASTER_USERNAME.trim().toLowerCase()||user.master_granted===1);
 const publicUser = (user,env) => ({id:user.id,username:user.username,...(isMaster(user,env)?{admin:true}:{})});
 const usageDay = now => new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0,10);
 async function recordUsage(db,user,request){
@@ -142,6 +149,7 @@ export default {
           await env.DB.prepare('INSERT INTO account_presence(user_id,tab_id,last_seen,page,title) VALUES(?,?,?,?,?) ON CONFLICT(user_id,tab_id) DO UPDATE SET last_seen=excluded.last_seen,page=excluded.page,title=excluded.title').bind(user.id,body.tabId,Date.now(),page,title).run();
           if(Math.random()<0.01)await env.DB.prepare('DELETE FROM account_presence WHERE last_seen<?').bind(Date.now()-86400000).run();
         }else await env.DB.prepare('DELETE FROM account_presence WHERE user_id=? AND tab_id=?').bind(user.id,body.tabId).run();
+        await notifyAdmin(env,'accounts');
         return json({ok:true});
       }
       if(path==='/admin/releases'&&request.method==='GET'){
@@ -182,6 +190,7 @@ export default {
         const updatedAt=Date.now();
         await env.DB.prepare('INSERT INTO system_monitor_settings(id,enabled,updated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled,updated_at=excluded.updated_at')
           .bind(body.enabled?1:0,updatedAt).run();
+        await updateSystemMonitor(env,body.enabled,updatedAt).catch(error=>console.warn('realtime_monitor_update_failed',error?.name));
         return json({ok:true,enabled:body.enabled,updatedAt,auditRecorded:await recordAdminAction(env,user,null,'systemMonitor',old?.enabled===1,body.enabled)});
       }
       if(path==='/admin/system-logs'&&request.method==='GET'){
@@ -226,7 +235,7 @@ export default {
         const active=await env.DB.prepare('SELECT user_id,page,title,last_seen FROM account_presence WHERE last_seen>=? ORDER BY last_seen DESC').bind(Date.now()-90000).all();
         const viewingByUser=new Map();
         for(const row of active.results||[])if(!viewingByUser.has(row.user_id))viewingByUser.set(row.user_id,row);
-        return json({accounts:(result.results||[]).map(row=>({...mergeControls(row,controlsById.get(row.id)),is_master:isMaster(row,env),visual_mode:byId.get(row.id)?.mode??legacyById.get(row.id)??'off',monitoring:byId.get(row.id)?.monitoring===1,viewing:viewingByUser.has(row.id),viewing_page:viewingByUser.get(row.id)?.page||'',viewing_title:viewingByUser.get(row.id)?.title||''}))});
+        return json({accounts:(result.results||[]).map(row=>({...mergeControls(row,controlsById.get(row.id)),is_master:isMaster(row,env),visual_mode:byId.get(row.id)?.mode??legacyById.get(row.id)??'off',monitoring:byId.get(row.id)?.monitoring===1,viewing:viewingByUser.has(row.id),viewing_last_seen:viewingByUser.get(row.id)?.last_seen,viewing_page:viewingByUser.get(row.id)?.page||'',viewing_title:viewingByUser.get(row.id)?.title||''}))});
       }
       const adminMatch=/^\/admin\/accounts\/([0-9a-f-]{36})$/.exec(path);
       if(adminMatch&&request.method==='POST'){
@@ -234,9 +243,13 @@ export default {
         const targetId=adminMatch[1],target=await env.DB.prepare('SELECT users.id,users.username,CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM users LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE users.id=?').bind(targetId).first();
         if(!target)return json({error:'アカウントが見つかりません。'},404);
         const body=await requestJson(request),action=body.action;
-        const audited=async(before=null,after=null,extra={})=>json({
-          ok:true,...extra,auditRecorded:await recordAdminAction(env,user,target,action,before,after),
-        });
+        const audited=async(before=null,after=null,extra={})=>{
+          if(action==='visualMode'||action==='monitoring')await notifyUsers(env,[targetId],'mode');
+          if(['master','delete','resetPassword'].includes(action)||(action==='traffic'&&after))await revokeRealtime(env,targetId);
+          const auditRecorded=await recordAdminAction(env,user,target,action,before,after);
+          await notifyAdmin(env,'accounts');
+          return json({ok:true,...extra,auditRecorded});
+        };
         if(action==='visualMode'){
           if(isOwner(target))return json({error:'オーナーアカウントのモードは変更できません。'},403);
           if(!['off','chaos','chaos2','jelly','spin','quake','zero','mirror','burning'].includes(body.mode))return json({error:'モードが無効です。'},400);
@@ -291,7 +304,11 @@ export default {
       }
       if (request.method === 'POST' && path === '/logout') {
         const token = /(?:^|;\s*)__Host-xy_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get('Cookie') || '')?.[1];
-        if (token) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(hash(token)).run();
+        if (token) {
+          const tokenHash=hash(token);
+          await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
+          await revokeRealtime(env,user.id,tokenHash);
+        }
         return json({ ok: true }, 200, { 'Set-Cookie': cookie('') });
       }
       if (request.method === 'GET' && path === '/history') {

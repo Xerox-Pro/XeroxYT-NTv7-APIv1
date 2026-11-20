@@ -1,3 +1,4 @@
+import {notifyUsers,notifyAdmin} from '../api/realtime.mjs';
 export const managementDb = env => env.MANAGEMENT_DB ?? env.DB;
 
 export function mergeControls(user, controls) {
@@ -15,8 +16,10 @@ export async function setControl(env, userId, action, enabled) {
   if (!env.MANAGEMENT_DB) {
     await env.DB.prepare(`INSERT INTO account_controls(user_id,${column},updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`)
       .bind(userId,Number(enabled),Date.now()).run();
-    return;
-  }
-  await env.MANAGEMENT_DB.prepare(`INSERT INTO managed_account_controls(user_id,${column}) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET ${column}=excluded.${column}`)
+  } else await env.MANAGEMENT_DB.prepare(`INSERT INTO managed_account_controls(user_id,${column}) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET ${column}=excluded.${column}`)
     .bind(userId,Number(enabled)).run();
+  await Promise.all([
+    notifyUsers(env,[userId],action==='ban'?(enabled?'banned':'unbanned'):'session'),
+    notifyAdmin(env,'accounts'),
+  ]);
 }

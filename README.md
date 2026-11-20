@@ -158,3 +158,11 @@ Interactive social login alone runs Chromium in an isolated, nonpersistent Verce
 The read-only /api/{instagram,tiktok}/public/{feed,search,resolve,stories} routes run in Cloudflare, without site login, linked account sessions or provider cookies. The browser tries Cloudflare directly and uses the existing same-origin transport only when direct connectivity fails. Public video URLs are rendered with the video player. Guest recommendations are labelled public recommendations, not a signed-in personalized For You feed.
 
 Upstream availability is conditional. TikWM currently reports a daily free API quota for Cloudflare requests; Instagram may require login for discovery, search or stories. These failures remain explicit errors, never fake successful empty feeds. No paid API, account credentials or private-content bypass is introduced.
+
+### アカウントのリアルタイム更新
+
+API Worker を先にデプロイします。既存の Worker 名・D1 バインディング・Secret・Origin 設定を保持し、本番 Wrangler 設定に `REALTIME` バインディングと SQLite クラス `RealtimeChannel` のマイグレーションを追加してください。既存のマイグレーションがあれば末尾へ追加します。Vercel の `API_BASE_URL_1` はこの主系 Worker を指します。ブラウザーは Vercel 経由で短命のチケットを取得し、Cloudflare に WebSocket を開きます。
+
+主系・副系の両方に `REALTIME` バインディングとマイグレーションを追加します。両方に同じ `REALTIME_RELAY_SECRET` を設定し、`REALTIME_RELAY_URL` には相手側の HTTPS Worker Origin を設定します。両系で同じアカウント用・管理用 D1 を参照します。どちらでも接続と更新ができ、中継先の停止中は Durable Object に通知を保存して再送します。再接続時は共有 D1 の最新状態を取得します。
+
+両 Worker の準備後に Vercel フロントエンドをデプロイし、別セッションで BAN・解除、モード、DM、グループDM、管理画面を確認してください。
