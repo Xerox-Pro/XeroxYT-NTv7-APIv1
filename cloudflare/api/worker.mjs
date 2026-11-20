@@ -24,7 +24,7 @@ function trackLastCommunication(user, request, env, ctx) {
   if (lastSeenWrites.get(user.id) === now) lastSeenWrites.delete(user.id);
  }));
 }
-async function handleRequest(request,env,ctx){
+async function handleRequest(request,env,ctx,monitor){
  const pathName=new URL(request.url).pathname;
  if(/^\/api\/(instagram|tiktok|x|x-public-post|social-browser)(?:\/|$)/i.test(pathName))return Response.json({error:'Not found'},{status:404});
  const direct=privatePath(pathName)&&/^XYT /.test(request.headers.get('Authorization')||'');
@@ -36,6 +36,7 @@ async function handleRequest(request,env,ctx){
  let response;
  try{
   const user=await currentUser(request,env.DB,env);
+  monitor.user=user;
   if(path===ticketPath&&request.method==='GET'){
    if(!user)return new Response(null,{status:401});
    return issueRealtimeTicket(request,env,user,sessionHash(request),isMaster(user,env));
@@ -84,31 +85,22 @@ function safeOperation(pathname){
   return /^[a-z][a-z0-9_-]{0,31}$/i.test(part)?part.toLowerCase():':id';
  }).join('/');
 }
-async function recordSystemRequest(request,env,route,status,durationMs){
- let userId=null;
- const token=/(?:^|;\s*)__Host-xy_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get('Cookie')||'')?.[1];
- if(token){
-  try{
-   const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));
-   const tokenHash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
-   const session=await env.DB.prepare('SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?').bind(tokenHash,Date.now()).first();
-   userId=session?.user_id||null;
-  }catch(error){console.warn('system_log_session_lookup_failed',error instanceof Error?error.message:'unknown');}
- }
+async function recordSystemRequest(request,env,route,status,durationMs,user){
  const now=Date.now();
- await env.DB.prepare('INSERT INTO system_request_logs(user_id,at,route,method,status,duration_ms) VALUES(?,?,?,?,?,?)')
-  .bind(userId,now,route,request.method,status,Math.max(0,Math.min(60000,durationMs))).run();
- await notifyAdmin(env,'logs');
- if(Math.random()<0.005){
-  try{await env.DB.prepare('DELETE FROM system_request_logs WHERE at<?').bind(now-7*86400000).run();}
-  catch(error){console.warn('system_log_cleanup_failed',error instanceof Error?error.message:'unknown');}
+ const duration=Math.max(0,Math.min(60000,durationMs));
+ if(env.REALTIME){
+  return env.REALTIME.getByName('admin').storeLogs([{id:crypto.randomUUID(),at:now,route,method:request.method,status,duration_ms:duration,user_id:user?.id??null,username:user?.username??null}],true);
  }
+ await env.DB.prepare('INSERT INTO system_request_logs(user_id,at,route,method,status,duration_ms) VALUES(?,?,?,?,?,?)')
+  .bind(user?.id??null,now,route,request.method,status,duration).run();
+ if(Math.random()<0.005)await env.DB.prepare('DELETE FROM system_request_logs WHERE at<?').bind(now-7*86400000).run();
 }
 const worker={async fetch(request,env,ctx){
  const started=Date.now(),path=new URL(request.url).pathname;
  let response;
+ const monitor={user:null};
  try{
-  const upstream=await handleRequest(request,env,ctx);
+  const upstream=await handleRequest(request,env,ctx,monitor);
   response=/^\/(api|internal)(\/|$)|^\/health$/.test(path)?secureApiResponse(upstream):upstream;
   return response;
  }finally{
@@ -118,7 +110,7 @@ const worker={async fetch(request,env,ctx){
     &&!/^\/api\/account\/(?:telemetry|admin\/(?:logs|system-logs|system-monitor))(?:\/|$)/.test(path)){
    const route=safeOperation(path);
    const task=systemMonitorEnabled(env)
-     .then(enabled=>enabled?recordSystemRequest(request,env,route,response?.status||500,Date.now()-started):undefined)
+     .then(enabled=>enabled?recordSystemRequest(request,env,route,response?.status||500,Date.now()-started,monitor.user):undefined)
      .catch(error=>console.warn('system_request_log_failed',error instanceof Error?error.message:'unknown'));
    ctx.waitUntil(task);
   }

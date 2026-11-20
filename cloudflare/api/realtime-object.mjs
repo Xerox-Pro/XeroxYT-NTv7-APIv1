@@ -9,6 +9,10 @@ export class RealtimeChannel extends DurableObject {
   super(ctx, env);
   ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS pending_notifications(type TEXT PRIMARY KEY, due INTEGER NOT NULL)');
   ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS relay_queue(key TEXT PRIMARY KEY, id TEXT NOT NULL, payload TEXT NOT NULL, due INTEGER NOT NULL, attempts INTEGER NOT NULL)');
+  ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS system_logs(id TEXT PRIMARY KEY, at INTEGER NOT NULL, data TEXT NOT NULL, pending INTEGER NOT NULL)');
+  ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS system_logs_at ON system_logs(at)');
+  ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS system_logs_pending ON system_logs(at) WHERE pending=1');
+  ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS live_logs(id TEXT PRIMARY KEY)');
   ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
  }
 
@@ -23,6 +27,62 @@ export class RealtimeChannel extends DurableObject {
    key,crypto.randomUUID(),JSON.stringify(payload),Date.now()+250,
   );
   await this.scheduleAlarm();
+ }
+
+ async storeLogs(logs,local) {
+  const now=Date.now();
+  const cutoff=now-7*86400000;
+  const sql=this.ctx.storage.sql;
+  const live=this.ctx.getWebSockets().length>0;
+  const pending=Number(local&&!!this.env.REALTIME_RELAY_URL);
+  const inserted=this.ctx.storage.transactionSync(()=>{
+   let changed=false;
+   for(const row of logs){
+    if(row.at<cutoff)continue;
+    const added=sql.exec('INSERT OR IGNORE INTO system_logs VALUES(?,?,?,?)',row.id,row.at,JSON.stringify(row),pending).rowsWritten;
+    if(added&&live)sql.exec('INSERT OR IGNORE INTO live_logs VALUES(?)',row.id);
+    changed ||= added>0;
+   }
+   if(changed&&(live||pending))sql.exec('INSERT OR IGNORE INTO pending_notifications VALUES(?,?)','log-stream',now+2000);
+   if(Math.random()<0.01)sql.exec('DELETE FROM system_logs WHERE at<?',cutoff);
+   return changed;
+  });
+  if(inserted)await this.scheduleAlarm();
+ }
+
+ listLogs(userId,errorsOnly) {
+  return this.ctx.storage.sql.exec(
+   `SELECT data FROM system_logs WHERE at>=? AND (?='' OR json_extract(data,'$.user_id')=?) AND (?=0 OR json_extract(data,'$.status')>=400) ORDER BY at DESC,id DESC LIMIT 150`,
+   Date.now()-7*86400000,userId,userId,Number(errorsOnly),
+  ).toArray().reverse().map(({data})=>JSON.parse(data));
+ }
+
+ async flushLogStream() {
+  const sql=this.ctx.storage.sql;
+  const live=sql.exec('SELECT system_logs.data FROM live_logs JOIN system_logs USING(id) ORDER BY at DESC,id DESC LIMIT 200').toArray();
+  sql.exec('DELETE FROM live_logs');
+  if(live.length)this.send('log-stream',undefined,{logs:live.reverse().map(({data})=>JSON.parse(data))});
+  const retry=await this.ctx.storage.get('log-retry');
+  const now=Date.now();
+  if(retry?.due>now){
+   sql.exec('INSERT OR IGNORE INTO pending_notifications VALUES(?,?)','log-stream',retry.due);
+   return;
+  }
+  const rows=sql.exec('SELECT id,data FROM system_logs WHERE pending=1 ORDER BY at,id LIMIT 50').toArray();
+  if(!rows.length)return;
+  let next=now+2000;
+  try {
+   await sendRelay(this.env,{channel:'admin',event:'log-batch',logs:rows.map(({data})=>JSON.parse(data))});
+   for(const {id} of rows)sql.exec('UPDATE system_logs SET pending=0 WHERE id=?',id);
+   if(retry)await this.ctx.storage.delete('log-retry');
+  }catch{
+   const attempts=(retry?.attempts??0)+1;
+   next=now+Math.min(300000,2000*2**Math.min(attempts,8));
+   await this.ctx.storage.put('log-retry',{due:next,attempts});
+  }
+  if(sql.exec('SELECT 1 FROM system_logs WHERE pending=1 LIMIT 1').toArray().length){
+   sql.exec('INSERT OR IGNORE INTO pending_notifications VALUES(?,?)','log-stream',next);
+  }
  }
 
  async scheduleAlarm(force=false) {
@@ -75,13 +135,13 @@ export class RealtimeChannel extends DurableObject {
   this.send(type, sessionHash || userId);
  }
 
- send(type, tag) {
+ send(type, tag, payload) {
   const now = Date.now();
   for (const socket of this.ctx.getWebSockets(tag)) {
    try {
     if ((socket.deserializeAttachment()?.expires ?? 0) <= now) socket.close(4001, 'Expired');
     else {
-     socket.send(JSON.stringify({type}));
+     socket.send(JSON.stringify({type,...payload}));
      if (type === 'session') socket.close(4001, 'Session changed');
     }
    } catch {
@@ -94,7 +154,10 @@ export class RealtimeChannel extends DurableObject {
   const sql=this.ctx.storage.sql;
   const now=Date.now();
   const pending = sql.exec('DELETE FROM pending_notifications WHERE due<=? RETURNING type',now).toArray();
-  for (const {type} of pending) this.send(type);
+  for (const {type} of pending) {
+   if(type==='log-stream')await this.flushLogStream();
+   else this.send(type);
+  }
   const queue=sql.exec('SELECT * FROM relay_queue WHERE due<=? ORDER BY due LIMIT 10',now).toArray();
   await Promise.all(queue.map(async ({id,payload,attempts})=>{
    try {
