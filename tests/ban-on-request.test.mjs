@@ -1,3 +1,6 @@
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync} from 'node:fs';
+import {TERMS_VERSION} from '../cloudflare/auth/terms.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import worker from '../cloudflare/api/worker.mjs';
@@ -24,13 +27,27 @@ test('a banned session receives only the BAN error on its next data or account r
  }
 });
 
-test('registration is disabled before reading or writing account data', async () => {
- const request = makeRequest('/api/account/register', {
-  method:'POST', headers:{'Content-Type':'application/json'}, body:'{}',
- });
- const response = await worker.fetch(request, env);
- assert.equal(response.status,403);
- assert.equal((await response.json()).code,'REGISTRATION_DISABLED');
+test('first registration succeeds, repeat and banned browsers cannot register', async () => {
+ const sqlite = new DatabaseSync(':memory:');
+ sqlite.exec(readFileSync(new URL('../cloudflare/auth/schema.sql',import.meta.url),'utf8'));
+ sqlite.exec(readFileSync(new URL('../cloudflare/auth/migrations/2026-11-20-registration-device.sql',import.meta.url),'utf8'));
+ const db = {prepare(sql){return {bind(...args){return {
+  first:async()=>sqlite.prepare(sql).get(...args)??null,
+  run:async()=>({meta:{changes:sqlite.prepare(sql).run(...args).changes}}),
+ };}};}};
+ const register = (username, device) => worker.fetch(makeRequest('/api/account/register',{
+  method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({username,device,password:'test password 123',termsAccepted:true,termsVersion:TERMS_VERSION}),
+ }),{...env,DB:db});
+ const device = 'f'.repeat(32);
+ const first = await register('fresh_member',device);
+ assert.equal(first.status,200);
+ assert.equal((await (await register('second_member',device)).json()).code,'DEVICE_ALREADY_REGISTERED');
+ const user = (await first.json()).user;
+ sqlite.prepare('INSERT INTO account_controls(user_id,banned,updated_at) VALUES(?,1,0)').run(user.id);
+ assert.equal((await (await register('third_member',device)).json()).code,'ACCOUNT_BANNED');
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS total FROM users').get().total,1);
+ sqlite.close();
 });
 
 test('ordinary session requests update last communication without client polling', async () => {

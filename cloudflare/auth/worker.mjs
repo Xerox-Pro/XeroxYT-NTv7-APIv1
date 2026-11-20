@@ -28,6 +28,12 @@ async function recordUsage(db,user,request){
   const search=/^\/api\/search(?:\/|$)/.test(path)?1:0;
   await db.prepare('INSERT INTO account_usage(user_id,day,requests,videos,searches,last_seen) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,day) DO UPDATE SET requests=requests+1,videos=videos+excluded.videos,searches=searches+excluded.searches,last_seen=excluded.last_seen').bind(user.id,usageDay(now),1,video,search,now).run();
 }
+const deviceHash = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value) ? hash(value) : null;
+async function linkDevice(db, device, userId) {
+  if (!device) return;
+  await db.prepare('INSERT INTO account_devices(device_hash,user_id) VALUES(?,?) ON CONFLICT(device_hash) DO NOTHING').bind(device,userId).run();
+}
+const duplicateDevice = () => json({error:'このブラウザではすでにアカウントを使用しています。既存のアカウントでログインしてください。',code:'DEVICE_ALREADY_REGISTERED'},409);
 async function startSession(db, user, env) {
   const token = randomBytes(32).toString('hex');
   await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').bind(hash(token), user.id, Date.now() + MAX_AGE * 1000).run();
@@ -52,7 +58,6 @@ export default {
       if (Number(request.headers.get('content-length') || 0) > 131072) return json({ error: 'データが大きすぎます。' }, 413);
       const sessionUser=gatewayUser===undefined?await currentUser(request,env.DB):gatewayUser;
       if(sessionUser?.banned)return bannedResponse();
-      if(path==='/register')return json({error:'新規アカウントの受付は停止しています。',code:'REGISTRATION_DISABLED'},403);
       if(path==='/client-release')return clientRelease(request,env,sessionUser);
       if(path==='/terms'){
         const user=sessionUser;
@@ -66,6 +71,8 @@ export default {
         const user = sessionUser;
         if(!user)return json({ error: 'ログインが必要です。' }, 401);
         if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
+        try { await linkDevice(env.DB,deviceHash(url.searchParams.get('device')),user.id); }
+        catch(error) { console.warn('ACCOUNT_DEVICE_LINK_FAILED',error?.code||'D1'); }
         // Checking an existing session must not depend on a D1 usage-statistics write.
         // D1 write-limit failures should not turn a valid login into HTTP 500.
         // Existing session checks refresh the current visible tab without a separate heartbeat.
@@ -76,18 +83,38 @@ export default {
         }
         return json({ user:{...publicUser(user,env),termsAccepted:await hasTerms(env.DB,user.id)} });
       }
-      if (request.method === 'POST' && path === '/login') {
+      if (request.method === 'POST' && (path === '/login' || path === '/register')) {
         const body = await requestJson(request);
         const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
         const password = body.password;
         if (!validUser(username) || !validPass(password)) return json({ error: 'ユーザー名は英小文字・数字・_で3〜32文字、パスワードは12文字以上です。' }, 400);
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
         if (!(await limit(env.DB, `ip:${ip}`, 100)) || !(await limit(env.DB, `user:${username}`, 10))) return json({ error: '試行回数が多すぎます。しばらく待ってください。' }, 429);
+        const device = deviceHash(body.device);
+        if (path === '/register') {
+          if (sessionUser) return duplicateDevice();
+          if (!device) return json({error:'ブラウザの登録情報を確認できません。ページを開き直してください。',code:'DEVICE_REQUIRED'},400);
+          const known = await env.DB.prepare('SELECT account_controls.banned FROM account_devices LEFT JOIN account_controls USING(user_id) WHERE device_hash=?').bind(device).first();
+          if (known?.banned) return bannedResponse();
+          if (known) return duplicateDevice();
+          if(body.termsAccepted!==true||body.termsVersion!==TERMS_VERSION)return termsRequired();
+          const salt = randomBytes(16).toString('hex');
+          const user = {id:crypto.randomUUID(),username};
+          const result = await env.DB.prepare('INSERT OR IGNORE INTO users(id,username,password_hash,password_salt,created_at,registration_device) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM account_devices WHERE device_hash=?)').bind(user.id,username,passHash(password,salt),salt,Date.now(),device,device).run();
+          if (!result.meta.changes) {
+            const claimed = await env.DB.prepare('SELECT user_id FROM account_devices WHERE device_hash=?').bind(device).first();
+            return claimed ? duplicateDevice() : json({error:'そのユーザー名は使用できません。'},409);
+          }
+          await env.DB.prepare('INSERT INTO user_terms_acceptances(user_id,version,accepted_at) VALUES(?,?,?)').bind(user.id,TERMS_VERSION,Date.now()).run();
+          return startSession(env.DB,user,env);
+        }
         const user = await env.DB.prepare('SELECT users.id, users.username, users.password_hash, users.password_salt, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE users.username = ?').bind(username).first();
         const actual = passHash(password, user?.password_salt || '00000000000000000000000000000000');
         const expected = user?.password_hash || '0'.repeat(64);
         if (!timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex')) || !user) return json({ error: 'ユーザー名またはパスワードが違います。' }, 401);
         if(body.termsAccepted===true&&body.termsVersion===TERMS_VERSION)await env.DB.prepare('INSERT OR IGNORE INTO user_terms_acceptances(user_id,version,accepted_at) VALUES(?,?,?)').bind(user.id,TERMS_VERSION,Date.now()).run();
+        try { await linkDevice(env.DB,device,user.id); }
+        catch(error) { console.warn('ACCOUNT_DEVICE_LINK_FAILED',error?.code||'D1'); }
         if(user.banned){const session=await startSession(env.DB,user,env);return bannedResponse({'Set-Cookie':session.headers.get('Set-Cookie')});}
         if(user.traffic_stopped)return json({error:'このアカウントの通信は停止されています。'},423);
         return startSession(env.DB, user, env);
