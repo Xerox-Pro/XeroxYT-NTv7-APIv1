@@ -25,10 +25,10 @@ export class RealtimeChannel extends DurableObject {
   await this.scheduleAlarm();
  }
 
- async scheduleAlarm() {
+ async scheduleAlarm(force=false) {
   const next=this.ctx.storage.sql.exec('SELECT MIN(due) AS due FROM (SELECT due FROM relay_queue UNION ALL SELECT due FROM pending_notifications)').one().due;
   if(next===null)return;
-  const current=await this.ctx.storage.getAlarm();
+  const current=force?null:await this.ctx.storage.getAlarm();
   if(current===null||next<current)await this.ctx.storage.setAlarm(next);
  }
 
@@ -100,12 +100,13 @@ export class RealtimeChannel extends DurableObject {
    try {
     await sendRelay(this.env,JSON.parse(payload));
     sql.exec('DELETE FROM relay_queue WHERE id=?',id);
-   } catch {
+   } catch (error) {
+    if(attempts===0)console.warn('realtime_relay_retry',error?.name);
     const delay=Math.min(300000,1000*2**Math.min(attempts,9));
     sql.exec('UPDATE relay_queue SET due=?,attempts=attempts+1 WHERE id=?',Date.now()+delay,id);
    }
   }));
-  await this.scheduleAlarm();
+  await this.scheduleAlarm(true);
  }
 
  webSocketMessage() {}

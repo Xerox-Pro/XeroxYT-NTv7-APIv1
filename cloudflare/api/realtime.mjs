@@ -75,7 +75,7 @@ export async function sendRelay(env, event) {
  const target = new URL(relayPath, env.REALTIME_RELAY_URL);
  if (target.protocol!=='https:' || !target.hostname.endsWith('.workers.dev') || !env.REALTIME_RELAY_SECRET) throw Error('Invalid realtime relay configuration');
  const body = JSON.stringify({...event,at:Date.now()});
- const response = await fetch(target,{method:'POST',body,redirect:'error',
+ const response = await fetch(target,{method:'POST',body,redirect:'manual',
   headers:{'X-Realtime-Signature':relayMac(env.REALTIME_RELAY_SECRET,body).toString('hex')},
   signal:AbortSignal.timeout(3000),
  });
