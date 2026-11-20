@@ -16,8 +16,7 @@
   "vars": {
     "NODE_ENV": "production",
     "ALLOWED_ORIGINS": "https://your-frontend.vercel.app",
-    "REQUIRE_PROXY_SECRET": "true",
-    "SOCIAL_BROWSER_PROVIDER": "vercel"
+    "REQUIRE_PROXY_SECRET": "true"
   },
   "observability": {
     "enabled": true,
@@ -26,8 +25,5 @@
       "enabled": true,
       "head_sampling_rate": 0.01
     }
-  },
-  "browser": {
-    "binding": "BROWSER"
   }
 }
