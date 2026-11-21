@@ -101,13 +101,25 @@ export async function updateSystemMonitor(env, enabled, updatedAt) {
 }
 
 async function publish(env, channel, event, userId, sessionHash) {
- try {
-  if (!env.REALTIME) return;
-  const target=env.REALTIME.getByName(channel);
+ if(!env.REALTIME)return;
+ const target=env.REALTIME.getByName(channel);
+ const payload={channel,event,userId,sessionHash};
+ try{
   await target.publish(event,userId,sessionHash);
-  if(env.REALTIME_RELAY_URL)await target.enqueueRelay({channel,event,userId,sessionHash});
- } catch (error) {
-  console.warn('realtime_delivery_failed', event, error?.name);
+ }catch(error){
+  console.warn('realtime_delivery_failed',event,error?.name);
+ }
+ if(!env.REALTIME_RELAY_URL)return;
+ try{
+  await target.enqueueRelay(payload);
+ }catch(error){
+  // If this account's Durable Objects hit their quota, the peer can still deliver critical events.
+  if(!['mode','banned','unbanned','session'].includes(event)){
+   console.warn('realtime_relay_enqueue_failed',event,error?.name);
+   return;
+  }
+  try{await sendRelay(env,payload);}
+  catch(cause){console.warn('realtime_direct_relay_failed',event,cause?.name);}
  }
 }
 
