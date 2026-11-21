@@ -104,23 +104,21 @@ async function publish(env, channel, event, userId, sessionHash) {
  if(!env.REALTIME)return;
  const target=env.REALTIME.getByName(channel);
  const payload={channel,event,userId,sessionHash};
- try{
-  await target.publish(event,userId,sessionHash);
- }catch(error){
+ const local=Promise.resolve().then(()=>target.publish(event,userId,sessionHash)).catch(error=>{
   console.warn('realtime_delivery_failed',event,error?.name);
- }
- if(!env.REALTIME_RELAY_URL)return;
- try{
-  await target.enqueueRelay(payload);
- }catch(error){
-  // If this account's Durable Objects hit their quota, the peer can still deliver critical events.
-  if(!['mode','banned','unbanned','session'].includes(event)){
-   console.warn('realtime_relay_enqueue_failed',event,error?.name);
-   return;
+ });
+ if(!env.REALTIME_RELAY_URL)return local;
+ const relay=async()=>{
+  // Deliver account controls immediately even when the two clients use different Workers.
+  // Keep the durable retry queue for an unavailable peer.
+  if(['mode','banned','unbanned','session'].includes(event)){
+   try{await sendRelay(env,payload);return;}
+   catch(error){console.warn('realtime_direct_relay_failed',event,error?.name);}
   }
-  try{await sendRelay(env,payload);}
-  catch(cause){console.warn('realtime_direct_relay_failed',event,cause?.name);}
- }
+  try{await target.enqueueRelay(payload);}
+  catch(error){console.warn('realtime_relay_enqueue_failed',event,error?.name);}
+ };
+ await Promise.all([local,relay()]);
 }
 
 export const notifyAdmin = (env, event) => publish(env, adminChannel, event);
