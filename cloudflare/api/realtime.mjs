@@ -61,7 +61,7 @@ export async function receiveRealtimeRelay(request, env) {
  try { body = new TextDecoder().decode(await boundedBytes(request,32768)); }
  catch { return new Response(null,{status:413}); }
  if (!timingSafeEqual(supplied,relayMac(env.REALTIME_RELAY_SECRET,body))) return new Response(null,{status:403});
- const {channel,event,userId,sessionHash,at,logs} = JSON.parse(body);
+ const {channel,event,userId,sessionHash,at,logs,mode} = JSON.parse(body);
  if (!Number.isSafeInteger(at) || Math.abs(Date.now()-at)>30000) return new Response(null,{status:403});
  if (channel!=='admin' && !/^account:[A-Za-z0-9_-]{1,64}$/.test(channel)) return new Response(null,{status:400});
  if(channel==='admin'&&event==='log-batch'&&Array.isArray(logs)&&logs.length<=50){
@@ -71,7 +71,7 @@ export async function receiveRealtimeRelay(request, env) {
  if (!['mode','banned','unbanned','session','dm','rooms','accounts','logs','monitor'].includes(event)) return new Response(null,{status:400});
  const target=env.REALTIME.getByName(channel);
  if(event==='monitor')await target.invalidateMonitor();
- await target.publish(event,userId,sessionHash);
+ await target.publish(event,userId,sessionHash,event==='mode'&&typeof mode==='string'?{mode}:undefined);
  return new Response(null,{status:204});
 }
 
@@ -100,11 +100,11 @@ export async function updateSystemMonitor(env, enabled, updatedAt) {
  await notifyAdmin(env,'monitor');
 }
 
-async function publish(env, channel, event, userId, sessionHash) {
+async function publish(env, channel, event, userId, sessionHash, mode) {
  if(!env.REALTIME)return;
  const target=env.REALTIME.getByName(channel);
  const payload={channel,event,userId,sessionHash};
- const local=Promise.resolve().then(()=>target.publish(event,userId,sessionHash)).catch(error=>{
+ const local=Promise.resolve().then(()=>target.publish(event,userId,sessionHash,mode===undefined?undefined:{mode})).catch(error=>{
   console.warn('realtime_delivery_failed',event,error?.name);
  });
  if(!env.REALTIME_RELAY_URL)return local;
@@ -112,7 +112,7 @@ async function publish(env, channel, event, userId, sessionHash) {
   // Deliver account controls immediately even when the two clients use different Workers.
   // Keep the durable retry queue for an unavailable peer.
   if(['mode','banned','unbanned','session'].includes(event)){
-   try{await sendRelay(env,payload);return;}
+   try{await sendRelay(env,{...payload,mode});return;}
    catch(error){console.warn('realtime_direct_relay_failed',event,error?.name);}
   }
   try{await target.enqueueRelay(payload);}
@@ -122,8 +122,8 @@ async function publish(env, channel, event, userId, sessionHash) {
 }
 
 export const notifyAdmin = (env, event) => publish(env, adminChannel, event);
-export const notifyUsers = (env, ids, event) => Promise.all(
- [...new Set(ids)].map(id=>publish(env, accountChannel(id), event)),
+export const notifyUsers = (env, ids, event, mode) => Promise.all(
+ [...new Set(ids)].map(id=>publish(env, accountChannel(id), event,undefined,undefined,mode)),
 );
 export const revokeRealtime = (env, id, sessionHash) => Promise.all([
  publish(env, accountChannel(id), 'session', id, sessionHash),

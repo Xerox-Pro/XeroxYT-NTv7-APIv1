@@ -252,7 +252,7 @@ export default {
         if(!target)return json({error:'アカウントが見つかりません。'},404);
         const body=await requestJson(request),action=body.action;
         const audited=async(before=null,after=null,extra={})=>{
-          if(action==='visualMode'||action==='monitoring')await notifyUsers(env,[targetId],'mode');
+          if(action==='visualMode'||action==='monitoring')await notifyUsers(env,[targetId],'mode',extra.mode);
           if(['master','delete','resetPassword'].includes(action)||(action==='traffic'&&after))await revokeRealtime(env,targetId);
           const auditRecorded=await recordAdminAction(env,user,target,action,before,after);
           await notifyAdmin(env,'accounts');
