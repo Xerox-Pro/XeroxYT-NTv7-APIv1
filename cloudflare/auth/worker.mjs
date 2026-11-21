@@ -260,7 +260,7 @@ export default {
         };
         if(action==='visualMode'){
           if(isOwner(target))return json({error:'オーナーアカウントのモードは変更できません。'},403);
-          if(!['off','chaos','chaos2','jelly','spin','quake','zero','mirror','burning'].includes(body.mode))return json({error:'モードが無効です。'},400);
+          if(!['off','chaos','chaos2','jelly','spin','quake','zero','mirror','burning','cleaning'].includes(body.mode))return json({error:'モードが無効です。'},400);
           const before=(await accountManagement(env,targetId)).mode;
           await managementDb(env).prepare('INSERT INTO account_management(user_id,mode) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode').bind(targetId,body.mode).run();
           return audited(before,body.mode,{mode:body.mode});
