@@ -132,7 +132,7 @@ export class RealtimeChannel extends DurableObject {
   return new Response(null, {status:101, webSocket:client, headers:{'Sec-WebSocket-Protocol':'xerox-realtime-v1'}});
  }
 
- publish(type, userId, sessionHash) {
+ publish(type, userId, sessionHash, payload) {
   const now = Date.now();
   // High-volume admin events are coalesced with a trailing notification.
   if (type === 'logs' || type === 'accounts') {
@@ -141,7 +141,7 @@ export class RealtimeChannel extends DurableObject {
    this.ctx.storage.sql.exec('INSERT OR IGNORE INTO pending_notifications(type,due) VALUES(?,?)', type, due ?? now+2000);
    return this.scheduleAlarm();
   }
-  this.send(type, sessionHash || userId);
+  this.send(type, sessionHash || userId,payload);
  }
 
  send(type, tag, payload) {
