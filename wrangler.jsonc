@@ -6,10 +6,14 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
-  "durable_objects": {
-    "bindings": [{"name": "REALTIME", "class_name": "RealtimeChannel"}]
-  },
-  "migrations": [{"tag": "realtime-v1", "new_sqlite_classes": ["RealtimeChannel"]}],
+  "migrations": [
+    {
+      "tag": "realtime-v1",
+      "new_sqlite_classes": [
+        "RealtimeChannel"
+      ]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
