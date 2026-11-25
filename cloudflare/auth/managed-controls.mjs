@@ -5,10 +5,14 @@ export function mergeControls(user, controls) {
   return {...user,banned:controls?.banned??user.banned??0,traffic_stopped:controls?.traffic_stopped??user.traffic_stopped??0};
 }
 
-export async function readControls(env, user) {
+export async function readControls(env, user, includeMode = false) {
   if (!user||!env.MANAGEMENT_DB) return user;
-  const controls = await managementDb(env).prepare('SELECT banned,traffic_stopped FROM managed_account_controls WHERE user_id=?').bind(user.id).first();
-  return mergeControls(user,controls);
+  // Retrieve mode alongside the existing authoritative account-control lookup.
+  const sql=includeMode
+    ? 'SELECT c.banned,c.traffic_stopped,m.mode,m.monitoring FROM (SELECT ? AS user_id) u LEFT JOIN managed_account_controls c ON c.user_id=u.user_id LEFT JOIN account_management m ON m.user_id=u.user_id'
+    : 'SELECT banned,traffic_stopped FROM managed_account_controls WHERE user_id=?';
+  const controls=await managementDb(env).prepare(sql).bind(user.id).first();
+  return {...mergeControls(user,controls),...(includeMode?{mode:controls?.mode??user.mode??'off',monitoring:controls?.monitoring===1}:{})};
 }
 
 export async function setControl(env, userId, action, enabled) {

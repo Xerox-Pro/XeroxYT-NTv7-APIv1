@@ -46,8 +46,8 @@ export async function currentUser(request, db, env={DB:db}) {
 }
 export async function currentUserByHash(db,env,tokenHash) {
   if (!tokenHash) return null;
-  const user=await db.prepare('SELECT users.id, users.username, sessions.expires_at, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(tokenHash, Date.now()).first();
-  return readControls(env,user);
+  const user=await db.prepare('SELECT users.id, users.username, sessions.expires_at, account_visual_modes.mode AS mode, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM sessions JOIN users ON users.id = sessions.user_id LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id LEFT JOIN account_visual_modes ON account_visual_modes.user_id=users.id WHERE token_hash = ? AND expires_at > ?').bind(tokenHash, Date.now()).first();
+  return readControls(env,user,true);
 }
 const isOwner = user => user?.username?.toLowerCase() === 'xerox0521';
 export const isMaster = (user,env) => !!user&&typeof env.MASTER_USERNAME==='string'&&(isOwner(user)||user.username===env.MASTER_USERNAME.trim().toLowerCase()||user.master_granted===1);

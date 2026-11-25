@@ -13,7 +13,7 @@ function trackLastCommunication(user, request, env, ctx) {
  if (!/^\/(?:api\/|stream\/|360\/|edu\/|scratch-edu\/)/.test(path) ||
   /^\/api\/account\/(?:presence|visual-mode|dm|admin)(?:\/|$)/.test(path)) return;
  const now = Date.now();
- if (now - (lastSeenWrites.get(user.id) ?? 0) < 30000) return;
+ if (now - (lastSeenWrites.get(user.id) ?? 0) < 300000) return;
  if (lastSeenWrites.size >= 2048) lastSeenWrites.delete(lastSeenWrites.keys().next().value);
  lastSeenWrites.set(user.id, now);
  const day = new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -31,7 +31,7 @@ async function handleRequest(request,env,ctx,monitor){
  const rejected=authorizeSource(request,direct||request.method==='OPTIONS'?{...env,REQUIRE_PROXY_SECRET:'false'}:env);if(rejected)return rejected;
  const url=new URL(request.url),path=url.pathname;
  const origin=request.headers.get('Origin'),allowed=(env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim());
- const cors=origin&&allowed.includes(origin)?{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Credentials':'true','Access-Control-Allow-Headers':'Content-Type,Authorization,Range,X-Client-Id,X-Usage-Token,X-Client-Usage','Access-Control-Allow-Methods':'GET,POST,PUT,OPTIONS','Access-Control-Max-Age':'600','Access-Control-Expose-Headers':'X-Daily-Usage-Token,Retry-After','Vary':'Origin'}:{};
+ const cors=origin&&allowed.includes(origin)?{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Credentials':'true','Access-Control-Allow-Headers':'Content-Type,Authorization,Range,X-Client-Id,X-Usage-Token,X-Client-Usage','Access-Control-Allow-Methods':'GET,POST,PUT,OPTIONS','Access-Control-Max-Age':'600','Access-Control-Expose-Headers':'X-Daily-Usage-Token,Retry-After,X-XeroxYT-Account-Id,X-XeroxYT-Account-Mode','Vary':'Origin'}:{};
  if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
  let response;
  try{
@@ -65,13 +65,13 @@ async function systemMonitorEnabled(env){
  monitorState.pending=readSystemMonitor(env)
   .then(enabled=>{
    monitorState.enabled=enabled;
-   monitorState.expires=Date.now()+3000;
+   monitorState.expires=Date.now()+30000;
    return monitorState.enabled;
   })
   .catch(error=>{
    console.warn('system_monitor_state_failed',error instanceof Error?error.message:'unknown');
    monitorState.enabled=false;
-   monitorState.expires=Date.now()+3000;
+   monitorState.expires=Date.now()+30000;
    return false;
   })
   .finally(()=>{monitorState.pending=null;});
@@ -102,6 +102,18 @@ const worker={async fetch(request,env,ctx){
  try{
   const upstream=await handleRequest(request,env,ctx,monitor);
   response=/^\/(api|internal)(\/|$)|^\/health$/.test(path)?secureApiResponse(upstream):upstream;
+  // Only emit account metadata on authenticated API responses; do not add a separate
+  // D1 query or request, and never weaken the existing BAN check.
+  if(monitor.user?.id&&!monitor.user.banned&&/^\/api\//.test(path)&&request.method!=='OPTIONS'){
+   const mode=monitor.user.mode??'off';
+   const headers=new Headers(response.headers);
+   if(['off','chaos','chaos2','jelly','spin','quake','zero','mirror','burning','cleaning'].includes(mode)){
+    headers.set('X-XeroxYT-Account-Id',monitor.user.id);
+    headers.set('X-XeroxYT-Account-Mode',mode);
+    headers.set('Cache-Control','private, no-store');
+    response=new Response(response.body,{status:response.status,statusText:response.statusText,headers});
+   }
+  }
   return response;
  }finally{
   // Cloudflare waitUntil writes the log without delaying API responses or video streaming.
