@@ -5,13 +5,34 @@ import {requestJson} from '../security/http.mjs';
 import {handleDm} from './dm.mjs';
 import {clientRelease} from './releases.mjs';
 import {TERMS_VERSION,TERMS_SECTIONS,hasTerms,termsRequired} from './terms.mjs';
-import { randomBytes, scryptSync, createHash, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scryptSync, createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 const MAX_AGE = 60 * 60 * 24 * 30;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const cookie = token => `__Host-xy_session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${token ? MAX_AGE : 0}`;
 const json = (body, status = 200, headers = {}) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
-const passHash = (password, salt) => scryptSync(password, Buffer.from(salt, 'hex'), 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex');
+// Preserve the existing scrypt format; only move the expensive operation out of the
+// production Worker. Local development continues to use the identical native KDF.
+const passHash = async (password, salt, env) => {
+  if (env.NODE_ENV !== 'production' || env.REQUIRE_PROXY_SECRET !== 'true') {
+    return scryptSync(password, Buffer.from(salt, 'hex'), 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex');
+  }
+  try {
+    if (!env.API_SHARED_SECRET) throw new Error('Missing account KDF authentication');
+    const payload = JSON.stringify({password, salt, timestamp: Date.now()});
+    const signature = createHmac('sha256', env.API_SHARED_SECRET).update('xerox-account-kdf-v1\n'+payload).digest('hex');
+    const response = await fetch('https://xeroxapp044.vercel.app/api/internal/account-crypto', {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(8000),
+      headers: {'Content-Type': 'application/json', 'X-Account-KDF-Signature': signature}, body: payload
+    });
+    if (!response.ok) throw new Error('Password service unavailable');
+    const data = await response.json();
+    if (typeof data.hash !== 'string' || !/^[a-f0-9]{64}$/.test(data.hash)) throw new Error('Invalid password service response');
+    return data.hash;
+  } catch {
+    throw Object.assign(new Error('Password service unavailable'), {code:'ACCOUNT_CRYPTO_UNAVAILABLE'});
+  }
+};
 export const bannedResponse = (headers) => json({error:'このアカウントはBANされています。',code:'ACCOUNT_BANNED',banned:true},403,headers);
 const validUser = name => typeof name === 'string' && /^[a-z0-9_]{3,32}$/.test(name);
 const validPass = password => typeof password === 'string' && password.length >= 12 && Buffer.byteLength(password) <= 256;
@@ -115,7 +136,7 @@ export default {
           if(body.termsAccepted!==true||body.termsVersion!==TERMS_VERSION)return termsRequired();
           const salt = randomBytes(16).toString('hex');
           const user = {id:crypto.randomUUID(),username};
-          const result = await env.DB.prepare('INSERT OR IGNORE INTO users(id,username,password_hash,password_salt,created_at,registration_device) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM account_devices WHERE device_hash=?)').bind(user.id,username,passHash(password,salt),salt,Date.now(),device,device).run();
+          const result = await env.DB.prepare('INSERT OR IGNORE INTO users(id,username,password_hash,password_salt,created_at,registration_device) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM account_devices WHERE device_hash=?)').bind(user.id,username,await passHash(password,salt,env),salt,Date.now(),device,device).run();
           if (!result.meta.changes) {
             const claimed = await env.DB.prepare('SELECT user_id FROM account_devices WHERE device_hash=?').bind(device).first();
             return claimed ? duplicateDevice() : json({error:'そのユーザー名は使用できません。'},409);
@@ -124,7 +145,7 @@ export default {
           return startSession(env.DB,user,env);
         }
         const storedUser = await env.DB.prepare('SELECT users.id, users.username, users.password_hash, users.password_salt, COALESCE(account_controls.banned,0) AS banned, COALESCE(account_controls.traffic_stopped,0) AS traffic_stopped, CASE WHEN account_master_grants.user_id IS NULL THEN 0 ELSE 1 END AS master_granted FROM users LEFT JOIN account_controls ON account_controls.user_id=users.id LEFT JOIN account_master_grants ON account_master_grants.user_id=users.id WHERE users.username = ?').bind(username).first();
-        const actual = passHash(password, storedUser?.password_salt || '00000000000000000000000000000000');
+        const actual = await passHash(password, storedUser?.password_salt || '00000000000000000000000000000000',env);
         const expected = storedUser?.password_hash || '0'.repeat(64);
         if (!timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex')) || !storedUser) return json({ error: 'ユーザー名またはパスワードが違います。' }, 401);
         const user=await readControls(env,storedUser);
@@ -294,7 +315,7 @@ export default {
         }
         if(action==='resetPassword'){
           if(!validPass(body.password))return json({error:'新しいパスワードは12文字以上にしてください。'},400);
-          const salt=randomBytes(16).toString('hex');await env.DB.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').bind(passHash(body.password,salt),salt,targetId).run();await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();return audited();
+          const salt=randomBytes(16).toString('hex');await env.DB.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').bind(await passHash(body.password,salt,env),salt,targetId).run();await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(targetId).run();return audited();
         }
         if(action==='ban'||action==='traffic'){
           if(typeof body.enabled!=='boolean')return json({error:'有効・無効の指定が不正です。'},400);
@@ -336,6 +357,7 @@ export default {
       return json({ error: '見つかりません。' }, 404);
     } catch (err) {
       console.warn(JSON.stringify({event:'account_request_failed',status:err.status||500,code:err.code||'ACCOUNT_FAILED'}));
+      if(err.code==='ACCOUNT_CRYPTO_UNAVAILABLE')return json({error:'認証サーバーに一時的に接続できません。時間をおいて再試行してください。',code:err.code},503);
       if(err.code==='D1_WRITE_LIMIT')return json({error:'アカウントの保存先が本日の書き込み上限に達しました。日本時間の午前9時以降に再試行してください。',code:err.code},503);
       if(err.status===400||err.status===413)return json({error:err.message},err.status);
       return json({ error: '処理に失敗しました。時間をおいてお試しください。' }, 500);
